@@ -12,7 +12,7 @@ namespace LaneShifter
         public ushort HoveredSegmentId  { get; private set; }
         public ushort SelectedSegmentId { get; private set; }
 
-        // Written by the panel when the mouse enters a lane row; read in RenderOverlay.
+        // Written by the panel on lane-row hover; read in RenderOverlay.
         public static uint HoveredLaneId_Static;
 
         private static readonly Color32 HoverColor    = new Color32(0,   181, 255, 180);
@@ -57,11 +57,11 @@ namespace LaneShifter
         {
             base.OnToolUpdate();
 
-            // Right-click or Escape — deactivate and close panel.
+            // Right-click or Escape: deactivate and close panel.
             if (Input.GetMouseButtonDown(1) || Input.GetKeyDown(KeyCode.Escape))
             {
                 LaneShiftPanel.Instance?.Hide();
-                SelectedSegmentId   = 0;
+                SelectedSegmentId    = 0;
                 HoveredLaneId_Static = 0;
                 DisableTool();
                 return;
@@ -69,7 +69,7 @@ namespace LaneShifter
 
             HoveredSegmentId = GetHoveredSegment();
 
-            // Left-click on segment (not inside UI) — select it.
+            // Left-click on segment (not inside UI): select it.
             if (Input.GetMouseButtonDown(0) && !UIView.IsInsideUI())
             {
                 if (HoveredSegmentId != 0)
@@ -110,15 +110,18 @@ namespace LaneShifter
             try
             {
                 Bezier3 bezier = Singleton<NetManager>.instance.m_lanes.m_buffer[laneId].m_bezier;
+                // Full CS1 signature: (cameraInfo, color, bezier, width, startAngle, endAngle, minY, maxY, renderLimits, alphaBlend)
                 Singleton<RenderManager>.instance.OverlayEffect.DrawBezier(
                     cameraInfo,
                     LaneColor,
                     bezier,
-                    1.5f,
-                    -1f,
-                    -1f,
+                    1.5f,           // width
+                    -1f,            // startAngle (-1 = no cap)
+                    -1f,            // endAngle
                     bezier.a.y - 2f,
-                    bezier.d.y + 2f);
+                    bezier.d.y + 2f,
+                    false,          // renderLimits
+                    true);          // alphaBlend
             }
             catch { /* laneId may be stale between frames */ }
         }
@@ -128,7 +131,6 @@ namespace LaneShifter
             base.OnDisable();
             HoveredSegmentId    = 0;
             HoveredLaneId_Static = 0;
-            // Hide panel whenever another tool is selected.
             LaneShiftPanel.Instance?.Hide();
             SelectedSegmentId = 0;
         }

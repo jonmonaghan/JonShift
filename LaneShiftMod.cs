@@ -28,8 +28,8 @@ namespace LaneShifter
 
         public override void OnLevelLoaded(LoadMode mode)
         {
-            if (mode != LoadMode.LoadGame    && mode != LoadMode.NewGame
-             && mode != LoadMode.LoadScenario && mode != LoadMode.NewScenario)
+            // CS1 valid modes: LoadGame, NewGame, LoadMap, NewMap
+            if (mode != LoadMode.LoadGame && mode != LoadMode.NewGame)
                 return;
 
             LaneShiftManager.Create();
@@ -131,9 +131,7 @@ namespace LaneShifter
             return btn;
         }
 
-        // ---- Icon loading ----
-        // Tries to load icon.png embedded as a resource; falls back to a
-        // solid green square so the build never fails due to a missing file.
+        // ---- Icon: embedded resource or fallback green square ----
         private static Texture2D LoadIcon()
         {
             try
