@@ -9,7 +9,6 @@ on:
 
 jobs:
   build:
-    # Use a Windows runner instead of Linux
     runs-on: windows-latest
 
     steps:
@@ -21,10 +20,6 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    # 3. Restore any NuGet packages if your project uses them
-    - name: Restore NuGet Packages
-      run: nuget restore
-
-    # 4. Compile the mod using MSBuild
+    # 3. Compile the mod using MSBuild directly
     - name: Build Mod
       run: msbuild /p:Configuration=Release
