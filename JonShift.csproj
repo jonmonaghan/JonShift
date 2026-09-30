@@ -3,7 +3,40 @@
     <TargetFramework>net472</TargetFramework>
     <OutputType>Library</OutputType>
     <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable><Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <OutputType>Library</OutputType>
+    <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>disable</Nullable>
+    <!-- Prevent the SDK engine from stripping out local file paths -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>D:\a\JonShift\JonShift\libs\Assembly-CSharp.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="ColossalManaged">
+      <HintPath>D:\a\JonShift\JonShift\libs\ColossalManaged.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="ICities">
+      <HintPath>D:\a\JonShift\JonShift\libs\ICities.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>D:\a\JonShift\JonShift\libs\UnityEngine.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>D:\a\JonShift\JonShift\libs\UnityEngine.UI.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+  </ItemGroup>
+</Project>
+
     
     <!-- Critical fallback path for the compiler -->
     <AssemblySearchPaths>$(MSBuildProjectDirectory)\libs;$(AssemblySearchPaths)</AssemblySearchPaths>
