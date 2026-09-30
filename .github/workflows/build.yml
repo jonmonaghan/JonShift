@@ -17,14 +17,13 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    - name: Setup NuGet
-      uses: NuGet/setup-nuget@v1
+    # Using the modern dotnet restore handles Sdk-style projects perfectly
+    - name: Restore Dependencies
+      run: dotnet restore
 
-    - name: Restore NuGet Packages
-      run: nuget restore
-
+    # MSBuild will now perfectly build the project with restored targets
     - name: Build Mod DLL
-      run: msbuild /p:Configuration=Release
+      run: msbuild JonShift.csproj /p:Configuration=Release /p:Platform="Any CPU"
 
     - name: Upload Mod DLL Artifact
       uses: actions/upload-artifact@v4
