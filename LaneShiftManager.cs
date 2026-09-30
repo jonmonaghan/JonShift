@@ -6,19 +6,18 @@ using ColossalFramework;
 using ColossalFramework.Math;
 using UnityEngine;
 
-namespace JonShift
+namespace LaneShifter
 {
-    /// <summary>
-    /// Stores per-lane lateral shift offsets and applies them after UpdateLanes.
-    /// </summary>
     public class LaneShiftManager
     {
-        // ---- Singleton ----
         public static LaneShiftManager Instance { get; private set; }
         public static void Create()  { Instance = new LaneShiftManager(); }
         public static void Release() { Instance = null; }
 
-        // laneId -> lateral shift (metres, positive = right relative to road direction)
+        // Stash bytes here from OnLoadData (fires before Instance exists).
+        // OnLevelLoaded picks them up after Create().
+        public static byte[] PendingLoadData;
+
         private readonly Dictionary<uint, float> _shifts = new Dictionary<uint, float>();
 
         // ---- Public API ----
@@ -36,23 +35,16 @@ namespace JonShift
                 _shifts[laneId] = shift;
         }
 
-        public bool HasAnyShift(ushort segmentId)
-        {
-            foreach (uint laneId in GetLaneIds(segmentId))
-                if (_shifts.ContainsKey(laneId)) return true;
-            return false;
-        }
-
-        // Called from Harmony postfix — moves each lane bezier laterally.
+        // Apply stored shifts to every lane in a segment after UpdateLanes runs.
         public void ApplyShifts(ushort segmentId)
         {
-            if (segmentId == 0) return;
+            if (segmentId == 0 || _shifts.Count == 0) return;
 
             NetManager nm = Singleton<NetManager>.instance;
             ref NetSegment seg = ref nm.m_segments.m_buffer[segmentId];
             if (seg.Info == null) return;
 
-            uint laneId = seg.m_lanes;
+            uint laneId   = seg.m_lanes;
             int laneCount = seg.Info.m_lanes.Length;
             for (int i = 0; i < laneCount && laneId != 0; i++)
             {
@@ -66,8 +58,8 @@ namespace JonShift
             }
         }
 
-        // Shift a Bezier3 laterally (perpendicular to road, XZ plane only).
-        private static Bezier3 ShiftBezier(Bezier3 b, float shift)
+        // Shift a Bezier3 laterally (perpendicular to road direction, XZ plane).
+        public static Bezier3 ShiftBezier(Bezier3 b, float shift)
         {
             return new Bezier3(
                 b.a + GetNormal(b.b - b.a) * shift,
@@ -77,7 +69,7 @@ namespace JonShift
             );
         }
 
-        // Perpendicular to direction in XZ plane (points right of direction).
+        // Right-hand normal in XZ plane.
         private static Vector3 GetNormal(Vector3 dir)
         {
             if (dir == Vector3.zero) return Vector3.right;
@@ -86,7 +78,7 @@ namespace JonShift
             return new Vector3(dir.z, 0f, -dir.x);
         }
 
-        // ---- Helpers ----
+        // Helpers
         public static List<uint> GetLaneIds(ushort segmentId)
         {
             var list = new List<uint>();
@@ -95,7 +87,7 @@ namespace JonShift
             ref NetSegment seg = ref nm.m_segments.m_buffer[segmentId];
             if (seg.Info == null) return list;
             uint laneId = seg.m_lanes;
-            int count = seg.Info.m_lanes.Length;
+            int count   = seg.Info.m_lanes.Length;
             for (int i = 0; i < count && laneId != 0; i++)
             {
                 list.Add(laneId);
@@ -104,15 +96,14 @@ namespace JonShift
             return list;
         }
 
-        // Trigger game to recalculate lanes for a segment.
         public static void UpdateSegment(ushort segmentId)
         {
-            NetManager nm = Singleton<NetManager>.instance;
-            nm.UpdateSegment(segmentId);
+            if (segmentId == 0) return;
+            Singleton<NetManager>.instance.UpdateSegment(segmentId);
         }
 
-        // ---- Serialisation (XML) ----
-        [XmlRoot("JonShiftData")]
+        // ---- Serialisation ----
+        [XmlRoot("LaneShifterData")]
         public class SaveData
         {
             [XmlArray("Lanes"), XmlArrayItem("Lane")]
@@ -121,7 +112,7 @@ namespace JonShift
 
         public class LaneEntry
         {
-            [XmlAttribute] public uint LaneId;
+            [XmlAttribute] public uint  LaneId;
             [XmlAttribute] public float Shift;
         }
 
@@ -150,19 +141,19 @@ namespace JonShift
                 foreach (var e in data.Lanes)
                     _shifts[e.LaneId] = e.Shift;
 
-                // Re-apply all shifts after load.
-                var seenSegments = new HashSet<ushort>();
+                // Re-apply shifts now that lanes exist in game memory.
+                var seen = new HashSet<ushort>();
                 NetManager nm = Singleton<NetManager>.instance;
-                foreach (uint laneId in _shifts.Keys)
+                foreach (uint lid in _shifts.Keys)
                 {
-                    ushort segId = nm.m_lanes.m_buffer[laneId].m_segment;
-                    if (seenSegments.Add(segId))
+                    ushort segId = nm.m_lanes.m_buffer[lid].m_segment;
+                    if (segId != 0 && seen.Add(segId))
                         nm.m_segments.m_buffer[segId].UpdateLanes(segId, true);
                 }
             }
             catch (Exception ex)
             {
-                Debug.LogError("[JonShift] Deserialize error: " + ex);
+                Debug.LogError("[LaneShifter] Deserialize error: " + ex);
             }
         }
     }

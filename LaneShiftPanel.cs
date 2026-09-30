@@ -1,30 +1,26 @@
+using System.Collections.Generic;
 using ColossalFramework;
 using ColossalFramework.UI;
 using UnityEngine;
 
-namespace JonShift
+namespace LaneShifter
 {
-    /// <summary>
-    /// Floating UI panel that lists lanes for the selected segment.
-    /// Each lane gets +0.5 / +0.25 / label / -0.25 / -0.5 / Reset buttons.
-    /// </summary>
     public class LaneShiftPanel : UIPanel
     {
         public static LaneShiftPanel Instance { get; private set; }
 
-        private UILabel  _titleLabel;
-        private UIButton _closeButton;
-        private UIScrollablePanel _laneContainer;
+        private ushort _segmentId;
+        private UILabel _titleLabel;
+        private UIScrollablePanel _laneList;
 
-        private ushort _currentSegment;
+        // Preset offsets shown as quick-pick buttons
+        private static readonly float[] Presets = { 0.5f, 1.0f };
 
         // ---- Creation ----
         public static LaneShiftPanel Create()
         {
             UIView uiView = UIView.GetAView();
-            var go = new GameObject("JonShiftPanel");
-            go.transform.SetParent(uiView.transform, false);
-            Instance = go.AddComponent<LaneShiftPanel>();
+            Instance = uiView.AddUIComponent(typeof(LaneShiftPanel)) as LaneShiftPanel;
             return Instance;
         }
 
@@ -32,202 +28,233 @@ namespace JonShift
         {
             if (Instance != null)
             {
-                GameObject.Destroy(Instance.gameObject);
+                DestroyImmediate(Instance.gameObject);
                 Instance = null;
             }
         }
 
-        // ---- UIComponent lifecycle ----
+        // ---- UIComponent setup ----
         public override void Start()
         {
             base.Start();
-            BuildUI();
-            Hide();
-        }
-
-        private void BuildUI()
-        {
-            // Root panel
             backgroundSprite = "MenuPanel2";
-            color            = new Color32(58, 68, 84, 255);
-            width            = 360f;
-            height           = 60f; // grows dynamically
+            opacity          = 0.95f;
+            width            = 340f;
+            height           = 60f;   // grows when lanes are added
+            isVisible        = false;
             canFocus         = true;
             isInteractive    = true;
-            clipChildren     = true;
-            absolutePosition = new Vector3(200, 200);
+            relativePosition = new Vector3(Screen.width / 2f - 170f, Screen.height / 2f - 150f);
 
             // Drag support
             UIDragHandle drag = AddUIComponent<UIDragHandle>();
             drag.width  = width;
-            drag.height = 32f;
+            drag.height = 40f;
             drag.relativePosition = Vector3.zero;
             drag.target = this;
 
-            // Title
             _titleLabel = AddUIComponent<UILabel>();
-            _titleLabel.text             = "Lane Shift";
+            _titleLabel.text             = "Lane Shifter";
             _titleLabel.textScale        = 0.9f;
-            _titleLabel.textColor        = Color.white;
-            _titleLabel.relativePosition = new Vector3(10, 8);
+            _titleLabel.font             = GetUIFont("OpenSans-Regular");
+            _titleLabel.relativePosition = new Vector3(10f, 12f);
 
             // Close button
-            _closeButton = AddUIComponent<UIButton>();
-            _closeButton.text             = "X";
-            _closeButton.width            = 22f;
-            _closeButton.height           = 22f;
-            _closeButton.textScale        = 0.85f;
-            _closeButton.normalBgSprite   = "ButtonSmall";
-            _closeButton.hoveredBgSprite  = "ButtonSmallHovered";
-            _closeButton.pressedBgSprite  = "ButtonSmallPressed";
-            _closeButton.textColor        = Color.white;
-            _closeButton.relativePosition = new Vector3(width - 28f, 5f);
-            _closeButton.eventClicked    += (_, __) => Hide();
+            UIButton close = AddUIComponent<UIButton>();
+            close.width             = 24f;
+            close.height            = 24f;
+            close.normalBgSprite    = "buttonclose";
+            close.hoveredBgSprite   = "buttonclosehover";
+            close.pressedBgSprite   = "buttonclosepressed";
+            close.relativePosition  = new Vector3(width - 30f, 8f);
+            close.eventClicked     += (_, __) =>
+            {
+                Hide();
+                _segmentId = 0;
+                LaneShiftTool.HoveredLaneId_Static = 0;  // clear lane highlight
+            };
 
-            // Scrollable lane list
-            _laneContainer = AddUIComponent<UIScrollablePanel>();
-            _laneContainer.width            = width - 10f;
-            _laneContainer.relativePosition = new Vector3(5f, 38f);
-            _laneContainer.autoLayout       = true;
-            _laneContainer.autoLayoutDirection = LayoutDirection.Vertical;
-            _laneContainer.autoLayoutPadding   = new RectOffset(0, 0, 2, 2);
+            _laneList = AddUIComponent<UIScrollablePanel>();
+            _laneList.width              = width - 20f;
+            _laneList.height             = 300f;
+            _laneList.relativePosition   = new Vector3(10f, 45f);
+            _laneList.autoLayout         = true;
+            _laneList.autoLayoutDirection= LayoutDirection.Vertical;
+            _laneList.autoLayoutPadding  = new RectOffset(0, 0, 2, 2);
+            _laneList.scrollWheelDirection = UIOrientation.Vertical;
+            _laneList.clipChildren       = true;
+
+            UIScrollbar sb = AddUIComponent<UIScrollbar>();
+            sb.width             = 10f;
+            sb.height            = 300f;
+            sb.relativePosition  = new Vector3(width - 12f, 45f);
+            sb.orientation       = UIOrientation.Vertical;
+            sb.incrementAmount   = 20f;
+            UISlicedSprite track = sb.AddUIComponent<UISlicedSprite>();
+            track.spriteName     = "ScrollbarTrack";
+            track.size           = sb.size;
+            track.relativePosition = Vector3.zero;
+            sb.trackObject       = track;
+            UISlicedSprite thumb = track.AddUIComponent<UISlicedSprite>();
+            thumb.spriteName     = "ScrollbarThumb";
+            sb.thumbObject       = thumb;
+            _laneList.verticalScrollbar = sb;
         }
 
-        // ---- Public API ----
+        // ---- Public ----
         public void ShowForSegment(ushort segmentId)
         {
-            _currentSegment = segmentId;
-            RebuildLaneRows();
+            _segmentId = segmentId;
+            LaneShiftTool.HoveredLaneId_Static = 0;
+            _titleLabel.text = $"Lane Shifter — Segment #{segmentId}";
+            BuildLaneRows();
             Show();
         }
 
-        // ---- Internal ----
-        private void RebuildLaneRows()
+        // ---- Rebuild lane rows ----
+        private void BuildLaneRows()
         {
-            // Clear existing rows
-            while (_laneContainer.components.Count > 0)
-                DestroyImmediate(_laneContainer.components[0].gameObject);
+            // Clear old rows
+            var old = new List<UIComponent>(_laneList.components);
+            foreach (var c in old) DestroyImmediate(c.gameObject);
 
-            NetManager nm = Singleton<NetManager>.instance;
-            ref NetSegment seg = ref nm.m_segments.m_buffer[_currentSegment];
-            if (seg.Info == null) return;
+            LaneShiftManager mgr = LaneShiftManager.Instance;
+            if (mgr == null || _segmentId == 0) return;
 
-            _titleLabel.text = $"Lane Shift — Seg #{_currentSegment}";
+            List<uint> lanes = LaneShiftManager.GetLaneIds(_segmentId);
+            NetManager nm    = Singleton<NetManager>.instance;
+            NetInfo info      = nm.m_segments.m_buffer[_segmentId].Info;
 
-            uint laneId    = seg.m_lanes;
-            NetInfo.Lane[] laneInfos = seg.Info.m_lanes;
-            int rowCount   = 0;
-
-            for (int i = 0; i < laneInfos.Length && laneId != 0; i++)
+            for (int i = 0; i < lanes.Count; i++)
             {
-                NetInfo.Lane info = laneInfos[i];
-                uint capturedLaneId = laneId;
-                float currentShift  = LaneShiftManager.Instance?.GetShift(capturedLaneId) ?? 0f;
+                int   rowIndex = i;
+                uint  laneId   = lanes[i];
+                float curShift = mgr.GetShift(laneId);
+                string laneType = info != null && i < info.m_lanes.Length
+                    ? info.m_lanes[i].m_laneType.ToString()
+                    : "Lane";
 
-                AddLaneRow(_laneContainer, i, info, capturedLaneId, currentShift);
-                rowCount++;
+                // Row panel
+                UIPanel row = _laneList.AddUIComponent<UIPanel>();
+                row.width  = _laneList.width;
+                row.height = 38f;
+                row.backgroundSprite = "GenericPanel";
+                row.color            = new Color32(50, 50, 50, 200);
 
-                laneId = nm.m_lanes.m_buffer[laneId].m_nextLane;
+                // Highlight this lane bezier on hover
+                row.eventMouseEnter += (_, __) =>
+                {
+                    LaneShiftTool.HoveredLaneId_Static = laneId;
+                    row.color = new Color32(70, 90, 70, 220);
+                };
+                row.eventMouseLeave += (_, __) =>
+                {
+                    LaneShiftTool.HoveredLaneId_Static = 0;
+                    row.color = new Color32(50, 50, 50, 200);
+                };
+
+                // Lane label
+                UILabel lbl = row.AddUIComponent<UILabel>();
+                lbl.text             = $"#{i + 1} {laneType}";
+                lbl.textScale        = 0.75f;
+                lbl.relativePosition = new Vector3(6f, 12f);
+                lbl.width            = 90f;
+
+                // -1 button
+                UIButton btnMinus = MakeSmallButton(row, "-1", new Vector3(100f, 6f));
+                btnMinus.eventClicked += (_, __) => ApplyPreset(laneId, -1.0f);
+
+                // -.5 button
+                UIButton btnHalfM = MakeSmallButton(row, "-.5", new Vector3(132f, 6f));
+                btnHalfM.eventClicked += (_, __) => ApplyPreset(laneId, -0.5f);
+
+                // Editable offset field
+                UITextField offsetField = row.AddUIComponent<UITextField>();
+                offsetField.width             = 44f;
+                offsetField.height            = 24f;
+                offsetField.relativePosition  = new Vector3(169f, 7f);
+                offsetField.text              = curShift.ToString("F2");
+                offsetField.textScale         = 0.75f;
+                offsetField.padding           = new RectOffset(4, 4, 5, 0);
+                offsetField.builtinKeyNavigation = true;
+                offsetField.isInteractive     = true;
+                offsetField.readOnly          = false;
+                offsetField.selectionSprite   = "EmptySprite";
+                offsetField.normalBgSprite    = "TextFieldPanel";
+                offsetField.hoveredBgSprite   = "TextFieldPanelHovered";
+                offsetField.focusedBgSprite   = "TextFieldPanel";
+                offsetField.color             = new Color32(30, 30, 30, 255);
+                offsetField.textColor         = Color.white;
+                offsetField.numericalOnly     = false;
+                offsetField.allowFloats       = true;
+                offsetField.submitOnFocusLost = true;
+
+                // Capture laneId for the closure
+                uint capturedLane = laneId;
+                UITextField capturedField = offsetField;
+                offsetField.eventTextSubmitted += (_, value) =>
+                {
+                    if (float.TryParse(value.Trim(), out float parsed))
+                    {
+                        mgr.SetShift(capturedLane, parsed);
+                        LaneShiftManager.UpdateSegment(_segmentId);
+                        capturedField.text = parsed.ToString("F2");
+                    }
+                };
+
+                // +.5 button
+                UIButton btnHalfP = MakeSmallButton(row, "+.5", new Vector3(218f, 6f));
+                btnHalfP.eventClicked += (_, __) => ApplyPreset(laneId, 0.5f);
+
+                // +1 button
+                UIButton btnPlus = MakeSmallButton(row, "+1", new Vector3(252f, 6f));
+                btnPlus.eventClicked += (_, __) => ApplyPreset(laneId, 1.0f);
+
+                // Reset button
+                UIButton btnReset = MakeSmallButton(row, "0", new Vector3(287f, 6f));
+                btnReset.eventClicked += (_, __) =>
+                {
+                    mgr.SetShift(laneId, 0f);
+                    LaneShiftManager.UpdateSegment(_segmentId);
+                    // Refresh the text field via a full rebuild
+                    BuildLaneRows();
+                };
+
+                void ApplyPreset(uint lid, float delta)
+                {
+                    float next = Mathf.Round((mgr.GetShift(lid) + delta) * 100f) / 100f;
+                    mgr.SetShift(lid, next);
+                    LaneShiftManager.UpdateSegment(_segmentId);
+                    capturedField.text = next.ToString("F2");
+                }
             }
 
-            // Resize panel height
-            float rowH  = 34f;
-            float pad   = 4f;
-            height = 42f + rowCount * (rowH + pad) + 8f;
-            _laneContainer.height = height - 42f;
+            height = 50f + Mathf.Min(lanes.Count * 42f + 10f, 320f);
+            _laneList.height = height - 55f;
         }
 
-        private void AddLaneRow(UIScrollablePanel parent, int index, NetInfo.Lane info, uint laneId, float currentShift)
+        // ---- Helpers ----
+        private static UIButton MakeSmallButton(UIPanel parent, string text, Vector3 pos)
         {
-            // Row panel
-            UIPanel row = parent.AddUIComponent<UIPanel>();
-            row.width           = parent.width;
-            row.height          = 34f;
-            row.backgroundSprite = "GenericPanel";
-            row.color           = new Color32(40, 50, 65, 220);
-
-            // Lane label
-            UILabel lbl = row.AddUIComponent<UILabel>();
-            lbl.text             = $"[{index}] {info.m_laneType} pos:{info.m_position:F2}";
-            lbl.textScale        = 0.72f;
-            lbl.textColor        = Color.white;
-            lbl.autoSize         = false;
-            lbl.width            = 160f;
-            lbl.height           = 34f;
-            lbl.verticalAlignment   = UIVerticalAlignment.Middle;
-            lbl.relativePosition    = new Vector3(4f, 0f);
-
-            // Shift value display
-            UILabel shiftVal = row.AddUIComponent<UILabel>();
-            shiftVal.text          = FormatShift(currentShift);
-            shiftVal.textScale     = 0.78f;
-            shiftVal.textColor     = ShiftColor(currentShift);
-            shiftVal.autoSize      = false;
-            shiftVal.width         = 42f;
-            shiftVal.height        = 34f;
-            shiftVal.textAlignment = UIHorizontalAlignment.Center;
-            shiftVal.verticalAlignment = UIVerticalAlignment.Middle;
-            shiftVal.relativePosition  = new Vector3(162f, 0f);
-
-            // Buttons: -0.5  -0.25  +0.25  +0.5  Reset
-            float bx = 206f;
-            MakeShiftButton(row, "-½",  bx,       laneId, shiftVal, -0.5f);
-            MakeShiftButton(row, "-¼",  bx + 28f,  laneId, shiftVal, -0.25f);
-            MakeShiftButton(row, "+¼",  bx + 56f,  laneId, shiftVal, +0.25f);
-            MakeShiftButton(row, "+½",  bx + 84f,  laneId, shiftVal, +0.5f);
-            MakeResetButton(row, "R",  bx + 112f, laneId, shiftVal);
+            UIButton btn = parent.AddUIComponent<UIButton>();
+            btn.width            = 30f;
+            btn.height           = 24f;
+            btn.text             = text;
+            btn.textScale        = 0.65f;
+            btn.normalBgSprite   = "ButtonMenu";
+            btn.hoveredBgSprite  = "ButtonMenuHovered";
+            btn.pressedBgSprite  = "ButtonMenuPressed";
+            btn.textColor        = Color.white;
+            btn.hoveredTextColor = Color.white;
+            btn.relativePosition = pos;
+            return btn;
         }
 
-        private void MakeShiftButton(UIPanel row, string label, float x, uint laneId, UILabel display, float delta)
+        private static UIFont GetUIFont(string name)
         {
-            UIButton btn = row.AddUIComponent<UIButton>();
-            btn.text            = label;
-            btn.width           = 26f;
-            btn.height          = 26f;
-            btn.textScale       = 0.70f;
-            btn.textColor       = Color.white;
-            btn.normalBgSprite  = "ButtonSmall";
-            btn.hoveredBgSprite = "ButtonSmallHovered";
-            btn.pressedBgSprite = "ButtonSmallPressed";
-            btn.relativePosition = new Vector3(x, 4f);
-            btn.eventClicked   += (_, __) =>
-            {
-                if (LaneShiftManager.Instance == null) return;
-                float newShift = LaneShiftManager.Instance.GetShift(laneId) + delta;
-                // Clamp to reasonable range
-                newShift = Mathf.Clamp(newShift, -8f, 8f);
-                LaneShiftManager.Instance.SetShift(laneId, newShift);
-                LaneShiftManager.UpdateSegment(_currentSegment);
-                display.text  = FormatShift(newShift);
-                display.textColor = ShiftColor(newShift);
-            };
+            foreach (UIFont f in Resources.FindObjectsOfTypeAll<UIFont>())
+                if (f.name == name) return f;
+            return null;
         }
-
-        private void MakeResetButton(UIPanel row, string label, float x, uint laneId, UILabel display)
-        {
-            UIButton btn = row.AddUIComponent<UIButton>();
-            btn.text            = label;
-            btn.width           = 22f;
-            btn.height          = 26f;
-            btn.textScale       = 0.70f;
-            btn.textColor       = new Color32(255, 160, 80, 255);
-            btn.normalBgSprite  = "ButtonSmall";
-            btn.hoveredBgSprite = "ButtonSmallHovered";
-            btn.pressedBgSprite = "ButtonSmallPressed";
-            btn.relativePosition = new Vector3(x, 4f);
-            btn.eventClicked   += (_, __) =>
-            {
-                if (LaneShiftManager.Instance == null) return;
-                LaneShiftManager.Instance.SetShift(laneId, 0f);
-                LaneShiftManager.UpdateSegment(_currentSegment);
-                display.text  = FormatShift(0f);
-                display.textColor = ShiftColor(0f);
-            };
-        }
-
-        private static string FormatShift(float v) => v.ToString("+0.00;-0.00;0.00");
-        private static Color  ShiftColor(float v)  =>
-            Mathf.Approximately(v, 0f) ? Color.gray :
-            v > 0 ? new Color(0.4f, 1f, 0.4f) : new Color(1f, 0.55f, 0.4f);
     }
 }

@@ -1,22 +1,24 @@
 using ICities;
 using UnityEngine;
 
-namespace JonShift
+namespace LaneShifter
 {
     public class LaneShiftSerializableData : SerializableDataExtensionBase
     {
-        private const string DATA_ID = "JonShift_v1";
+        private const string DATA_ID = "LaneShifter_v1";
 
         public override void OnLoadData()
         {
             try
             {
-                byte[] data = serializableDataManager.LoadData(DATA_ID);
-                LaneShiftManager.Instance?.Deserialize(data);
+                // OnLoadData fires BEFORE OnLevelLoaded, so Instance doesn't exist yet.
+                // Stash the raw bytes; LaneShiftLoading.OnLevelLoaded picks them up.
+                LaneShiftManager.PendingLoadData = serializableDataManager.LoadData(DATA_ID);
+                Debug.Log($"[LaneShifter] OnLoadData: stashed {LaneShiftManager.PendingLoadData?.Length ?? 0} bytes.");
             }
             catch (System.Exception ex)
             {
-                Debug.LogError("[JonShift] OnLoadData error: " + ex);
+                Debug.LogError("[LaneShifter] OnLoadData error: " + ex);
             }
         }
 
@@ -26,11 +28,14 @@ namespace JonShift
             {
                 byte[] data = LaneShiftManager.Instance?.Serialize();
                 if (data != null)
+                {
                     serializableDataManager.SaveData(DATA_ID, data);
+                    Debug.Log($"[LaneShifter] OnSaveData: saved {data.Length} bytes.");
+                }
             }
             catch (System.Exception ex)
             {
-                Debug.LogError("[JonShift] OnSaveData error: " + ex);
+                Debug.LogError("[LaneShifter] OnSaveData error: " + ex);
             }
         }
     }

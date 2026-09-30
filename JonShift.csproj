@@ -2,51 +2,50 @@
 
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
-    <AssemblyName>JonShift</AssemblyName>
-    <RootNamespace>JonShift</RootNamespace>
+    <AssemblyName>LaneShifter</AssemblyName>
+    <RootNamespace>LaneShifter</RootNamespace>
     <Nullable>disable</Nullable>
-    <LangVersion>9.0</LangVersion>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <!--
-      Suppress warnings about missing XML docs and obsolete members in game DLLs.
-      CS0618 = obsolete, CS1591 = missing XML comment
-    -->
-    <NoWarn>0618,1591</NoWarn>
+    <LangVersion>8.0</LangVersion>
   </PropertyGroup>
-<ItemGroup>
-  <PackageReference Include="Lib.Harmony" Version="2.2.2" />
-</ItemGroup>
-  <!--
-    Game DLLs are expected in a 'lib/' folder at the repo root.
-    Typical CS1 install path:
-      C:\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Cities_Data\Managed\
-    Copy these into your lib/ folder:
-      Assembly-CSharp.dll
-      ColossalManaged.dll
-      ICities.dll
-      UnityEngine.dll
-      UnityEngine.UI.dll
-      0Harmony.dll           (from Harmony 2.x, or use NuGet below)
-  -->
+
+  <!-- Cities Skylines managed DLLs (provided by GitHub Actions) -->
   <ItemGroup>
     <Reference Include="Assembly-CSharp">
-      <HintPath>lib\Assembly-CSharp.dll</HintPath>
+      <HintPath>$(CS_MANAGED)/Assembly-CSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="ColossalManaged">
-      <HintPath>lib\ColossalManaged.dll</HintPath>
+      <HintPath>$(CS_MANAGED)/ColossalManaged.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="ICities">
-      <HintPath>lib\ICities.dll</HintPath>
+      <HintPath>$(CS_MANAGED)/ICities.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine">
-      <HintPath>lib\UnityEngine.dll</HintPath>
+      <HintPath>$(CS_MANAGED)/UnityEngine.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.UI">
-      <HintPath>lib\UnityEngine.UI.dll</HintPath>
+      <HintPath>$(CS_MANAGED)/UnityEngine.UI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Harmony (bundled in repo under lib/) -->
+  <ItemGroup>
+    <Reference Include="0Harmony">
+      <HintPath>$(MSBuildProjectDirectory)/lib/0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- UnifiedUILib: optional at runtime; included in lib/ only if present -->
+  <!-- We reference it only when the file exists so the CI does NOT fail    -->
+  <!-- when the DLL is absent — UUI detection is done via reflection.       -->
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/lib/UnifiedUILib.dll')">
+    <Reference Include="UnifiedUILib">
+      <HintPath>$(MSBuildProjectDirectory)/lib/UnifiedUILib.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
