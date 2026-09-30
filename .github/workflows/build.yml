@@ -2,31 +2,29 @@ name: Build Cities Skylines Mod
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
+    # Use a Windows runner instead of Linux
     runs-on: windows-latest
 
     steps:
-    - name: Checkout repository
+    # 1. Pull the code down to the virtual machine
+    - name: Checkout Repository
       uses: actions/checkout@v4
 
+    # 2. Add MSBuild to the command line path
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    # Using the modern dotnet restore handles Sdk-style projects perfectly
-    - name: Restore Dependencies
-      run: dotnet restore
+    # 3. Restore any NuGet packages if your project uses them
+    - name: Restore NuGet Packages
+      run: nuget restore
 
-    # MSBuild will now perfectly build the project with restored targets
-    - name: Build Mod DLL
-      run: msbuild JonShift.csproj /p:Configuration=Release /p:Platform="Any CPU"
-
-    - name: Upload Mod DLL Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: LaneShift-Mod
-        path: '**/bin/Release/**/*.dll'
+    # 4. Compile the mod using MSBuild
+    - name: Build Mod
+      run: msbuild /p:Configuration=Release
