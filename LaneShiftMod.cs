@@ -95,7 +95,7 @@ namespace LaneShifter
                             typeof(ToolBase), typeof(Texture2D) });
                 if (register == null) return false;
 
-                Texture2D icon = CreateFallbackIcon();
+                Texture2D icon = LoadIcon();
                 register.Invoke(null, new object[]
                 {
                     "LaneShifter",   // name
