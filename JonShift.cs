@@ -531,7 +531,7 @@ namespace LaneShift
         public static void Create()
         {
             UIView view = UIView.GetAView();
-            button = LaneShiftUI.MakeButton(view, "Lane Shift", 90f, 28f, new Vector3(10f, 90f));
+            button = LaneShiftUI.MakeButton((UIComponent)view, "Lane Shift", 90f, 28f, new Vector3(10f, 90f));
             button.name = "LaneShiftButton";
             button.eventClick += delegate (UIComponent c, UIMouseEventParameter p) { LaneShiftTool.Toggle(); };
         }
