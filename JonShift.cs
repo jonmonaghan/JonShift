@@ -22,18 +22,11 @@ namespace LaneShift
             get { return "Shift individual pedestrian, vehicle, transit, and other lanes on placed network segments."; }
         }
 
-        // Deliberately no Harmony types are referenced from IUserMod itself.
-        // The Harmony API is handled by LaneShiftPatcher, as recommended by
-        // CitiesHarmony.
-        public void OnEnabled()
-        {
-            LaneShiftPatcher.Enable();
-        }
-
-        public void OnDisabled()
-        {
-            LaneShiftPatcher.Disable();
-        }
+        // No OnEnabled/OnDisabled hook is required. CS1 automatically
+        // discovers the LoadingExtensionBase, ThreadingExtensionBase, and
+        // SerializableDataExtensionBase classes below. Keeping the IUserMod
+        // class free of optional runtime dependencies also avoids startup
+        // TypeLoadExceptions.
     }
 
     // =====================================================================
