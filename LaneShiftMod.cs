@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Reflection;
 using ColossalFramework.UI;
 using HarmonyLib;
@@ -16,8 +17,8 @@ namespace LaneShifter
     public class LaneShiftLoading : LoadingExtensionBase
     {
         private const string HARMONY_ID = "com.jonmonaghan.laneshifter";
-        private Harmony _harmony;
-        private UIButton _toolbarButton; // standalone button (used only if UUI unavailable)
+        private Harmony  _harmony;
+        private UIButton _toolbarButton;
 
         public override void OnCreated(ILoading loading)
         {
@@ -27,13 +28,13 @@ namespace LaneShifter
 
         public override void OnLevelLoaded(LoadMode mode)
         {
-            if (mode != LoadMode.LoadGame && mode != LoadMode.NewGame
-                && mode != LoadMode.LoadScenario && mode != LoadMode.NewScenario)
+            if (mode != LoadMode.LoadGame    && mode != LoadMode.NewGame
+             && mode != LoadMode.LoadScenario && mode != LoadMode.NewScenario)
                 return;
 
             LaneShiftManager.Create();
 
-            // ---- Restore saved shifts (OnLoadData fired before this) ----
+            // Restore saved shifts (OnLoadData fires before this method)
             if (LaneShiftManager.PendingLoadData != null)
             {
                 LaneShiftManager.Instance.Deserialize(LaneShiftManager.PendingLoadData);
@@ -43,7 +44,6 @@ namespace LaneShifter
             LaneShiftTool.Create();
             LaneShiftPanel.Create();
 
-            // ---- Register with UnifiedUI if available; else add standalone button ----
             if (!TryRegisterWithUUI())
                 _toolbarButton = AddStandaloneButton();
         }
@@ -67,7 +67,7 @@ namespace LaneShifter
             _harmony?.UnpatchAll(HARMONY_ID);
         }
 
-        // ---- UnifiedUI ----
+        // ---- UnifiedUI (optional, detected via reflection) ----
         private static bool TryRegisterWithUUI()
         {
             try
@@ -83,9 +83,6 @@ namespace LaneShifter
                 }
                 if (uui == null) return false;
 
-                // UnifiedUI.Helpers.UUIHelpers.RegisterToolButton(
-                //     string name, string groupName, string tooltip,
-                //     ToolBase tool, Texture2D icon)
                 Type helpers = uui.GetType("UnifiedUI.Helpers.UUIHelpers");
                 if (helpers == null) return false;
 
@@ -98,9 +95,9 @@ namespace LaneShifter
                 Texture2D icon = LoadIcon();
                 register.Invoke(null, new object[]
                 {
-                    "LaneShifter",   // name
-                    null,            // groupName (UUI will place it in the default group)
-                    "Lane Shifter",  // tooltip
+                    "LaneShifter",
+                    null,
+                    "Lane Shifter",
                     LaneShiftTool.Instance,
                     icon
                 });
@@ -110,12 +107,12 @@ namespace LaneShifter
             }
             catch (Exception ex)
             {
-                Debug.LogWarning("[LaneShifter] UUI registration failed, using standalone button: " + ex.Message);
+                Debug.LogWarning("[LaneShifter] UUI registration skipped: " + ex.Message);
                 return false;
             }
         }
 
-        // ---- Standalone toolbar button (fallback) ----
+        // ---- Standalone toolbar button (fallback when UUI not present) ----
         private static UIButton AddStandaloneButton()
         {
             UITabstrip strip = ToolsModifierControl.mainToolbar
@@ -125,35 +122,52 @@ namespace LaneShifter
             UIButton btn = strip.AddTab("LaneShifter", null, false) as UIButton;
             if (btn == null) return null;
 
-            btn.tooltip      = "Lane Shifter";
-            btn.normalFgSprite   = "ToolbarIconProps"; // generic fallback icon
+            btn.tooltip          = "Lane Shifter";
+            btn.normalFgSprite   = "ToolbarIconProps";
             btn.focusedFgSprite  = "ToolbarIconPropsPressed";
             btn.hoveredFgSprite  = "ToolbarIconPropsHovered";
             btn.pressedFgSprite  = "ToolbarIconPropsPressed";
             btn.eventClicked    += (_, __) => LaneShiftTool.EnableTool();
-
             return btn;
         }
 
-private static Texture2D LoadIcon()
-{
-    try
-    {
-        Assembly asm = Assembly.GetExecutingAssembly();
-        // resource name = "<AssemblyName>.<filename>"
-        using Stream s = asm.GetManifestResourceStream("LaneShifter.icon.png");
-        if (s == null) return CreateFallbackIcon();
+        // ---- Icon loading ----
+        // Tries to load icon.png embedded as a resource; falls back to a
+        // solid green square so the build never fails due to a missing file.
+        private static Texture2D LoadIcon()
+        {
+            try
+            {
+                Assembly asm = Assembly.GetExecutingAssembly();
+                Stream s = asm.GetManifestResourceStream("LaneShifter.icon.png");
+                if (s != null)
+                {
+                    using (s)
+                    {
+                        byte[] buf = new byte[s.Length];
+                        s.Read(buf, 0, buf.Length);
+                        Texture2D tex = new Texture2D(40, 40, TextureFormat.ARGB32, false);
+                        tex.LoadImage(buf);
+                        return tex;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[LaneShifter] Could not load icon.png: " + ex.Message);
+            }
+            return CreateFallbackIcon();
+        }
 
-        byte[] buf = new byte[s.Length];
-        s.Read(buf, 0, buf.Length);
-
-        var tex = new Texture2D(40, 40, TextureFormat.ARGB32, false);
-        tex.LoadImage(buf);  // Unity decodes the PNG
-        return tex;
+        private static Texture2D CreateFallbackIcon()
+        {
+            Texture2D tex  = new Texture2D(32, 32, TextureFormat.RGBA32, false);
+            Color32   fill = new Color32(80, 200, 120, 255);
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++)
+                    tex.SetPixel(x, y, fill);
+            tex.Apply();
+            return tex;
+        }
     }
-    catch
-    {
-        return CreateFallbackIcon(); // solid green square as backup
-    }
-}
 }

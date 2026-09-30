@@ -8,7 +8,15 @@
     <LangVersion>8.0</LangVersion>
   </PropertyGroup>
 
-  <!-- Cities Skylines managed DLLs (provided by GitHub Actions) -->
+  <!-- Harmony via NuGet (compile-time only; game ships its own 0Harmony.dll at runtime) -->
+  <ItemGroup>
+    <PackageReference Include="Lib.Harmony" Version="2.3.3">
+      <PrivateAssets>all</PrivateAssets>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <!-- Cities Skylines managed DLLs (provided by GitHub Actions via CS_MANAGED env var) -->
   <ItemGroup>
     <Reference Include="Assembly-CSharp">
       <HintPath>$(CS_MANAGED)/Assembly-CSharp.dll</HintPath>
@@ -32,24 +40,18 @@
     </Reference>
   </ItemGroup>
 
-  <!-- Harmony (bundled in repo under lib/) -->
-  <ItemGroup>
-    <Reference Include="0Harmony">
-      <HintPath>$(MSBuildProjectDirectory)/lib/0Harmony.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-  </ItemGroup>
-<ItemGroup>
-  <EmbeddedResource Include="icon.png" />
-</ItemGroup>
-  <!-- UnifiedUILib: optional at runtime; included in lib/ only if present -->
-  <!-- We reference it only when the file exists so the CI does NOT fail    -->
-  <!-- when the DLL is absent — UUI detection is done via reflection.       -->
+  <!-- UnifiedUILib: optional. Drop UnifiedUILib.dll into lib/ to compile with UUI support. -->
+  <!-- UUI detection at runtime is done via reflection, so the build works without it.     -->
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/lib/UnifiedUILib.dll')">
     <Reference Include="UnifiedUILib">
       <HintPath>$(MSBuildProjectDirectory)/lib/UnifiedUILib.dll</HintPath>
       <Private>false</Private>
     </Reference>
+  </ItemGroup>
+
+  <!-- Embedded icon (add icon.png to repo root to replace the fallback green square) -->
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/icon.png')">
+    <EmbeddedResource Include="icon.png" />
   </ItemGroup>
 
 </Project>
