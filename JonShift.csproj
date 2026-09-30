@@ -5,7 +5,7 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>disable</Nullable>
     
-    <!-- This tells the compiler explicitly where to look for DLLs before anything else -->
+    <!-- Critical fallback path for the compiler -->
     <AssemblySearchPaths>$(MSBuildProjectDirectory)\libs;$(AssemblySearchPaths)</AssemblySearchPaths>
   </PropertyGroup>
 
