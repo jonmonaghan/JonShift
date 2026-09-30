@@ -12,24 +12,12 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    # 1. Pull the code down to the virtual machine
     - name: Checkout Repository
       uses: actions/checkout@v4
 
-    # 2. Explicitly install the modern .NET SDK so it recognizes the 'Sdk' attribute
-    - name: Setup .NET SDK
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '8.0.x'
-
-    # 3. Add MSBuild to the command line path
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    # 4. Generate the required asset files using the modern compiler engine
-    - name: Restore Project Dependencies
-      run: dotnet restore JonShift.csproj
-
-    # 5. Compile the mod using MSBuild 
+    # We use msbuild to do both the restore pass and compilation at once safely
     - name: Build Mod
-      run: msbuild JonShift.csproj /p:Configuration=Release
+      run: msbuild JonShift.csproj /t:Restore;Build /p:Configuration=Release
