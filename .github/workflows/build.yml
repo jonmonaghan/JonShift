@@ -18,12 +18,19 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    # Added quotes around "/t:Restore;Build" to prevent PowerShell from splitting the command
     - name: Build Mod
       run: msbuild JonShift.csproj "/t:Restore;Build" /p:Configuration=Release
+
+    - name: Remove development files
+      shell: pwsh
+      run: |
+        Remove-Item "bin/Release/net472/*.pdb" -Force -ErrorAction SilentlyContinue
+        Remove-Item "bin/Release/net472/CitiesHarmony.Harmony.dll" -Force -ErrorAction SilentlyContinue
 
     - name: Upload Compiled Mod Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: LaneShift-Mod-DLL
-        path: bin/Release/net472/JonShift.dll
+        name: LaneShift-Mod
+        path: |
+          bin/Release/net472/JonShift.dll
+          bin/Release/net472/CitiesHarmony.API.dll
