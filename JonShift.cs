@@ -817,7 +817,7 @@ namespace LaneShift
                 return;
             }
 
-            panel = view.AddUIComponent<UIPanel>();
+            panel = (UIPanel)view.AddUIComponent(typeof(UIPanel));
             panel.name = "LaneShiftPanel";
             panel.backgroundSprite = "MenuPanel2";
             panel.width = Width;
@@ -1097,7 +1097,7 @@ namespace LaneShift
             // IMPORTANT: use AddUIComponent so the button is correctly owned
             // by the CS1 UI hierarchy. Raw GameObject.AddComponent is not the
             // normal way to create ColossalFramework.UI controls.
-            button = view.AddUIComponent<UIButton>();
+            button = (UIButton)view.AddUIComponent(typeof(UIButton));
             button.name = "LaneShiftButton";
             button.text = "Lane Shift";
             button.width = 92f;
