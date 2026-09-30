@@ -1,9 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 using System.Globalization;
 using System.Text;
-using CitiesHarmony.API;
 using ColossalFramework;
 using ColossalFramework.Math;
 using ColossalFramework.UI;
@@ -39,94 +37,6 @@ namespace LaneShift
     }
 
     // =====================================================================
-    // Harmony bootstrap / patch
-    // =====================================================================
-    public static class LaneShiftPatcher
-    {
-        private const string HarmonyId = "JonathanMonaghan.LaneShift";
-        private static bool enabled;
-        private static bool patched;
-
-        public static void Enable()
-        {
-            enabled = true;
-
-            // CitiesHarmony can auto-install/prepare itself and then invokes
-            // our patcher when Harmony is ready.
-            HarmonyHelper.DoOnHarmonyReady(delegate
-            {
-                if (enabled)
-                {
-                    PatchAll();
-                }
-            });
-        }
-
-        public static void Disable()
-        {
-            enabled = false;
-
-            if (HarmonyHelper.IsHarmonyInstalled)
-            {
-                UnpatchAll();
-            }
-        }
-
-        private static void PatchAll()
-        {
-            if (patched) return;
-
-            HarmonyLib.Harmony harmony = new HarmonyLib.Harmony(HarmonyId);
-
-            MethodInfo original = typeof(NetSegment).GetMethod(
-                "UpdateLanes",
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                null,
-                new Type[] { typeof(ushort), typeof(bool) },
-                null);
-
-            MethodInfo postfix = typeof(LaneShiftPatcher).GetMethod(
-                "UpdateLanesPostfix",
-                BindingFlags.Static | BindingFlags.NonPublic);
-
-            if (original == null || postfix == null)
-            {
-                Debug.LogError("[LaneShift] Could not find NetSegment.UpdateLanes; lane shifting is disabled.");
-                return;
-            }
-
-            harmony.Patch(
-                original,
-                postfix: new HarmonyLib.HarmonyMethod(postfix));
-
-            patched = true;
-            Debug.Log("[LaneShift] Harmony patch installed.");
-        }
-
-        private static void UpdateLanesPostfix(ushort segmentID)
-        {
-            try
-            {
-                LaneShiftData.Apply(segmentID);
-            }
-            catch (Exception ex)
-            {
-                Debug.LogException(ex);
-            }
-        }
-
-        private static void UnpatchAll()
-        {
-            if (!patched) return;
-
-            HarmonyLib.Harmony harmony = new HarmonyLib.Harmony(HarmonyId);
-            harmony.UnpatchAll(HarmonyId);
-            patched = false;
-            Debug.Log("[LaneShift] Harmony patch removed.");
-        }
-    }
-
-    // =====================================================================
     // Saved per-segment data
     // =====================================================================
     public class SegmentRecord
@@ -136,8 +46,12 @@ namespace LaneShift
         public string InfoName;
         public float[] Shift;
 
-        // UI runs on Unity's main thread while UpdateLanes runs from game
-        // code/simulation. This flag is protected by LaneShiftData.Sync.
+        public Bezier3[] BaseBezier;
+        public Bezier3[] AppliedBezier;
+        public bool[] HasApplied;
+
+        // UI runs on Unity's main thread while simulation work runs on the
+        // simulation thread. This flag is protected by LaneShiftData.Sync.
         public bool UpdateQueued;
 
         public SegmentRecord(ushort start, ushort end, string infoName, int laneCount)
@@ -145,7 +59,11 @@ namespace LaneShift
             Start = start;
             End = end;
             InfoName = infoName ?? string.Empty;
-            Shift = new float[Mathf.Max(0, laneCount)];
+            int count = Mathf.Max(0, laneCount);
+            Shift = new float[count];
+            BaseBezier = new Bezier3[count];
+            AppliedBezier = new Bezier3[count];
+            HasApplied = new bool[count];
             UpdateQueued = false;
         }
 
@@ -222,9 +140,9 @@ namespace LaneShift
             }
         }
 
-        // UI-safe: this method does NOT touch NetManager. It only updates our
-        // data and queues a simulation action that asks CS1 to rebuild the
-        // segment. The Harmony postfix then applies the offsets.
+        // UI-safe: this method updates our data and queues a simulation action
+        // that asks CS1 to rebuild the segment. ApplyAll then reapplies the
+        // saved offsets from the fresh game geometry.
         public static void SetShift(ushort segmentId, int laneIndex, float value)
         {
             bool queueUpdate = false;
@@ -335,10 +253,8 @@ namespace LaneShift
                 return;
             }
 
-            // The original game rebuilds lane geometry here. Our Harmony
-            // postfix immediately reapplies the stored offsets from fresh
-            // geometry. Call the array element directly because NetSegment
-            // is a struct and UpdateLanes mutates the stored segment.
+            // Ask CS1 to rebuild the segment. The next simulation tick sees
+            // the fresh unmodified lane geometry and reapplies our offsets.
             netManager.m_segments.m_buffer[segmentId].UpdateLanes(segmentId, true);
         }
 
@@ -389,24 +305,18 @@ namespace LaneShift
                    info.m_lanes.Length == record.Shift.Length;
         }
 
-        // Called from the Harmony postfix, i.e. after stock lane geometry has
-        // been rebuilt. This method is intentionally idempotent relative to a
-        // normal UpdateLanes call: the source geometry is fresh every time.
+        // Called once per simulation tick. If CS1 rebuilt a lane, its current
+        // Bezier differs from the last curve we applied, so we capture the new
+        // curve as the unmodified base before applying the saved offset.
         public static void Apply(ushort segmentId)
         {
             NetManager netManager = Singleton<NetManager>.instance;
             SegmentRecord record;
-            float[] shifts;
-            bool removeAfterApply = false;
 
             lock (Sync)
             {
                 if (!records.TryGetValue(segmentId, out record) || record == null)
-                {
                     return;
-                }
-
-                shifts = record.Shift != null ? (float[])record.Shift.Clone() : null;
             }
 
             NetSegment segment;
@@ -417,66 +327,57 @@ namespace LaneShift
                 return;
             }
 
-            if (shifts == null || shifts.Length == 0)
+            int laneCount = info.m_lanes.Length;
+            if (record.Shift == null || record.Shift.Length != laneCount)
             {
                 Remove(segmentId);
                 return;
             }
 
-            if (record == null)
-            {
-                return;
-            }
-
             uint laneId = segment.m_lanes;
             bool changed = false;
+            bool hasAnyShift = false;
 
-            for (int laneIndex = 0;
-                 laneIndex < info.m_lanes.Length &&
-                 laneIndex < shifts.Length &&
-                 laneId != 0;
-                 laneIndex++)
+            for (int laneIndex = 0; laneIndex < laneCount && laneId != 0; laneIndex++)
             {
-                float shift = shifts[laneIndex];
+                NetLane lane = netManager.m_lanes.m_buffer[laneId];
+                Bezier3 current = lane.m_bezier;
+                float shift = record.Shift[laneIndex];
+
+                if (Mathf.Abs(shift) >= 0.001f)
+                    hasAnyShift = true;
+
+                if (!record.HasApplied[laneIndex] || !Same(record.AppliedBezier[laneIndex], current))
+                {
+                    record.BaseBezier[laneIndex] = current;
+                    record.HasApplied[laneIndex] = false;
+                }
 
                 if (Mathf.Abs(shift) < 0.001f)
                 {
-                    laneId = netManager.m_lanes.m_buffer[laneId].m_nextLane;
+                    laneId = lane.m_nextLane;
                     continue;
                 }
 
-                NetLane lane = netManager.m_lanes.m_buffer[laneId];
-                lane.m_bezier = ShiftBezier(lane.m_bezier, shift);
+                Bezier3 shifted = ShiftBezier(record.BaseBezier[laneIndex], shift);
+                lane.m_bezier = shifted;
                 lane.UpdateLength();
                 netManager.m_lanes.m_buffer[laneId] = lane;
 
+                record.AppliedBezier[laneIndex] = shifted;
+                record.HasApplied[laneIndex] = true;
                 changed = true;
-                laneId = lane.m_nextLane;
-            }
 
-            // Do not immediately delete a zero-valued record during a call
-            // from ResetSegment until the stock UpdateLanes has completed;
-            // this postfix is that completion point.
-            lock (Sync)
-            {
-                SegmentRecord latest;
-                if (records.TryGetValue(segmentId, out latest) && latest != null)
-                {
-                    removeAfterApply = latest.AllZero();
-                }
+                laneId = lane.m_nextLane;
             }
 
             if (changed)
             {
-                // Update the aggregate segment length used by some stock
-                // traffic calculations after we changed the lane curves.
                 float total = 0f;
                 int count = 0;
                 uint currentLane = segment.m_lanes;
 
-                for (int laneIndex = 0;
-                     laneIndex < info.m_lanes.Length && currentLane != 0;
-                     laneIndex++)
+                for (int laneIndex = 0; laneIndex < laneCount && currentLane != 0; laneIndex++)
                 {
                     total += netManager.m_lanes.m_buffer[currentLane].m_length;
                     count++;
@@ -490,55 +391,32 @@ namespace LaneShift
                 }
             }
 
-            if (removeAfterApply)
-            {
+            if (!hasAnyShift)
                 Remove(segmentId);
-            }
+        }
+
+        private static bool Same(Bezier3 a, Bezier3 b)
+        {
+            return a.a == b.a && a.b == b.b && a.c == b.c && a.d == b.d;
         }
 
         public static void RebuildAllSavedSegments()
         {
-            try
+            // Saved records are applied automatically by ApplyAll on the next
+            // simulation tick after a level has loaded.
+        }
+
+        public static void ApplyAll()
+        {
+            List<ushort> ids;
+            lock (Sync)
             {
-                SimulationManager simulation = Singleton<SimulationManager>.instance;
-                if (simulation == null) return;
-
-                simulation.AddAction(delegate
-                {
-                    List<ushort> ids = new List<ushort>();
-
-                    lock (Sync)
-                    {
-                        foreach (KeyValuePair<ushort, SegmentRecord> pair in records)
-                        {
-                            if (pair.Value != null && !pair.Value.AllZero())
-                            {
-                                ids.Add(pair.Key);
-                            }
-                        }
-                    }
-
-                    for (int i = 0; i < ids.Count; i++)
-                    {
-                        ushort segmentId = ids[i];
-                        NetManager netManager = Singleton<NetManager>.instance;
-                        if (netManager == null || segmentId == 0 || segmentId >= netManager.m_segments.m_buffer.Length)
-                        {
-                            continue;
-                        }
-
-                        NetSegment segment = netManager.m_segments.m_buffer[segmentId];
-                        if ((segment.m_flags & NetSegment.Flags.Created) != NetSegment.Flags.None)
-                        {
-                            netManager.m_segments.m_buffer[segmentId].UpdateLanes(segmentId, true);
-                        }
-                    }
-                });
+                if (records.Count == 0) return;
+                ids = new List<ushort>(records.Keys);
             }
-            catch (Exception ex)
-            {
-                Debug.LogException(ex);
-            }
+
+            for (int i = 0; i < ids.Count; i++)
+                Apply(ids[i]);
         }
 
         private static Bezier3 ShiftBezier(Bezier3 bezier, float shift)
@@ -1476,6 +1354,21 @@ namespace LaneShift
             }
 
             base.OnLevelUnloading();
+        }
+    }
+
+    public class LaneShiftThreading : ThreadingExtensionBase
+    {
+        public override void OnAfterSimulationTick()
+        {
+            try
+            {
+                LaneShiftData.ApplyAll();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogException(ex);
+            }
         }
     }
 
