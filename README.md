@@ -11,11 +11,3 @@ A Cities Skylines 1 mod that lets you shift individual road lanes laterally on a
 - Right-click or Escape closes the panel and deselects the tool
 - Automatically integrates with **UnifiedUI** if installed; falls back to a standalone toolbar button
 
-## Building
-Requires the Cities Skylines managed DLLs set as `CS_MANAGED` env var.
-Optionally drop `UnifiedUILib.dll` into `lib/` before building to compile with UUI support.
-
-The GitHub Actions workflow handles everything automatically on push.
-
-## Installing
-Copy `LaneShifter.dll` to your Cities Skylines `Mods` folder (usually `%LOCALAPPDATA%/Colossal Order/Cities_Skylines/Addons/Mods/LaneShifter/`).
