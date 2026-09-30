@@ -127,7 +127,7 @@ namespace LaneShifter
 
             var shader = Shader.Find("UI/Default UI Shader");
             if (object.ReferenceEquals(shader, null))
-                shader = UIView.GetAView().defaultShader;
+                shader = Shader.Find("Sprites/Default");
 
             var mat = new Material(shader) { mainTexture = icon };
             atlas.material = mat;
