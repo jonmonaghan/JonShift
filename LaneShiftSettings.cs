@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Xml.Serialization;
+using ColossalFramework;
 using UnityEngine;
 
 namespace LaneShifter
@@ -8,6 +9,7 @@ namespace LaneShifter
     [XmlRoot("LaneShifterSettings")]
     public class LaneShiftSettings
     {
+        // ---- Singleton ----
         private static LaneShiftSettings _instance;
         public static LaneShiftSettings Instance
         {
@@ -24,29 +26,28 @@ namespace LaneShifter
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "Colossal Order", "Cities_Skylines", "LaneShifterSettings.xml");
 
-        // Stored as int (KeyCode enum value). 0 = None = unbound.
-        [XmlElement] public int  HotkeyCode  = (int)KeyCode.None;
-        [XmlElement] public bool HotkeyShift = false;
-        [XmlElement] public bool HotkeyCtrl  = false;
-        [XmlElement] public bool HotkeyAlt   = false;
-
-        [XmlElement] public bool ShowInUUI           = true;
+        // ---- Settings ----
+        // Hotkey: stored as KeyCode int. 0 = None (unbound).
+        [XmlElement] public int  HotkeyCode     = (int)KeyCode.None;
+        [XmlElement] public bool HotkeyShift    = false;
+        [XmlElement] public bool HotkeyCtrl     = false;
+        [XmlElement] public bool HotkeyAlt      = false;
+        [XmlElement] public bool ShowInUUI       = true;
         [XmlElement] public bool ShowStandaloneButton = true;
 
+        // ---- Helpers ----
         public bool IsHotkeyPressed()
         {
             if (HotkeyCode == (int)KeyCode.None) return false;
-            if (!Input.GetKeyDown((KeyCode)HotkeyCode)) return false;
-            bool shift = Input.GetKey(KeyCode.LeftShift)  || Input.GetKey(KeyCode.RightShift);
-            bool ctrl  = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
-            bool alt   = Input.GetKey(KeyCode.LeftAlt)    || Input.GetKey(KeyCode.RightAlt);
-            if (HotkeyShift != shift) return false;
-            if (HotkeyCtrl  != ctrl)  return false;
-            if (HotkeyAlt   != alt)   return false;
+            var key = (KeyCode)HotkeyCode;
+            if (!Input.GetKeyDown(key)) return false;
+            if (HotkeyShift && !Input.GetKey(KeyCode.LeftShift) && !Input.GetKey(KeyCode.RightShift)) return false;
+            if (HotkeyCtrl  && !Input.GetKey(KeyCode.LeftControl) && !Input.GetKey(KeyCode.RightControl)) return false;
+            if (HotkeyAlt   && !Input.GetKey(KeyCode.LeftAlt) && !Input.GetKey(KeyCode.RightAlt)) return false;
             return true;
         }
 
-        public string HotkeyDisplay()
+        public string HotkeyDisplayString()
         {
             if (HotkeyCode == (int)KeyCode.None) return "(unbound)";
             string s = "";
@@ -57,6 +58,7 @@ namespace LaneShifter
             return s;
         }
 
+        // ---- Persistence ----
         public static LaneShiftSettings Load()
         {
             try
@@ -68,7 +70,10 @@ namespace LaneShifter
                         return (LaneShiftSettings)xs.Deserialize(sr);
                 }
             }
-            catch (Exception ex) { Debug.LogWarning("[LaneShifter] Settings load: " + ex.Message); }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[LaneShifter] Settings load error: " + ex.Message);
+            }
             return new LaneShiftSettings();
         }
 
@@ -80,7 +85,10 @@ namespace LaneShifter
                 using (var sw = new StreamWriter(SettingsPath))
                     xs.Serialize(sw, this);
             }
-            catch (Exception ex) { Debug.LogWarning("[LaneShifter] Settings save: " + ex.Message); }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[LaneShifter] Settings save error: " + ex.Message);
+            }
         }
     }
 }
