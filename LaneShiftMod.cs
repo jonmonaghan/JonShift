@@ -135,16 +135,25 @@ namespace LaneShifter
             return btn;
         }
 
-        // ---- Simple 32x32 coloured icon ----
-        private static Texture2D CreateFallbackIcon()
-        {
-            var tex = new Texture2D(32, 32, TextureFormat.RGBA32, false);
-            var fill = new Color32(80, 200, 120, 255);
-            for (int y = 0; y < 32; y++)
-                for (int x = 0; x < 32; x++)
-                    tex.SetPixel(x, y, fill);
-            tex.Apply();
-            return tex;
-        }
+private static Texture2D LoadIcon()
+{
+    try
+    {
+        Assembly asm = Assembly.GetExecutingAssembly();
+        // resource name = "<AssemblyName>.<filename>"
+        using Stream s = asm.GetManifestResourceStream("LaneShifter.icon.png");
+        if (s == null) return CreateFallbackIcon();
+
+        byte[] buf = new byte[s.Length];
+        s.Read(buf, 0, buf.Length);
+
+        var tex = new Texture2D(40, 40, TextureFormat.ARGB32, false);
+        tex.LoadImage(buf);  // Unity decodes the PNG
+        return tex;
     }
+    catch
+    {
+        return CreateFallbackIcon(); // solid green square as backup
+    }
+}
 }
