@@ -22,7 +22,9 @@ namespace LaneShifter
         }
 
         private static string SettingsPath =>
-            Path.Combine(DataLocation.localApplicationData, "LaneShifterSettings.xml");
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Colossal Order", "Cities_Skylines", "LaneShifterSettings.xml");
 
         // ---- Settings ----
         // Hotkey: stored as KeyCode int. 0 = None (unbound).
