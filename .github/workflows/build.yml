@@ -1,4 +1,4 @@
-name: Build C# DLL
+name: Build Cities Skylines Mod
 
 on:
   push:
@@ -11,27 +11,23 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    # Step 1: Download your repository code onto the runner
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # Step 2: Set up the .NET SDK environment
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '8.0.x' # Change to your preferred .NET version (e.g., 6.0, 7.0, 9.0)
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
 
-    # Step 3: Restore dependencies (if you have NuGet packages)
-    - name: Restore dependencies
-      run: dotnet restore
+    - name: Setup NuGet
+      uses: NuGet/setup-nuget@v1
 
-    # Step 4: Compile the Class Library into a DLL
-    - name: Build Project
-      run: dotnet build --configuration Release
+    - name: Restore NuGet Packages
+      run: nuget restore
 
-    # Step 5: Save the compiled DLL so you can download it
-    - name: Upload Build Artifact
+    - name: Build Mod DLL
+      run: msbuild /p:Configuration=Release
+
+    - name: Upload Mod DLL Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: my-compiled-dll
+        name: LaneShift-Mod
         path: '**/bin/Release/**/*.dll'
