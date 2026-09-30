@@ -18,6 +18,10 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    # We use MSBuild direct compilation while skipping asset targets to rely entirely on your local libs folder
+    # 1. Force generate the project.assets.json file without trying to find external NuGet packages
+    - name: Restore Project Dependencies
+      run: dotnet restore JonShift.csproj --use-current-runtime
+
+    # 2. Build using MSBuild while explicitly passing the assembly location to the compiler
     - name: Build Mod
-      run: msbuild JonShift.csproj /p:Configuration=Release /p:ResolveNuGetPackages=false /p:SkipCompilerExecution=false
+      run: msbuild JonShift.csproj /p:Configuration=Release /p:AdditionalLibPaths="D:\a\JonShift\JonShift\libs"
