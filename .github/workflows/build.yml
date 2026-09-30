@@ -31,4 +31,4 @@ jobs:
       with:
         name: LaneShift-Mod
         path: |
-          bin/Release/net472/JonShift.dll
+          bin/Release/net472/LaneShifter.dll
