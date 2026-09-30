@@ -39,7 +39,9 @@
       <Private>false</Private>
     </Reference>
   </ItemGroup>
-
+<ItemGroup>
+  <EmbeddedResource Include="icon.png" />
+</ItemGroup>
   <!-- UnifiedUILib: optional at runtime; included in lib/ only if present -->
   <!-- We reference it only when the file exists so the CI does NOT fail    -->
   <!-- when the DLL is absent — UUI detection is done via reflection.       -->
