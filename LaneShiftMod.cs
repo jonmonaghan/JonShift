@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using System.Reflection;
 using ColossalFramework.UI;
 using HarmonyLib;
@@ -14,7 +13,7 @@ namespace LaneShifter
         public string Description => "Shift individual road lanes laterally. Hotkey: Shift+L";
     }
 
-    // Always-on hotkey monitor
+    // Always-on hotkey monitor (active even when Lane Shifter tool is not selected)
     public class LaneShiftHotkeyMonitor : MonoBehaviour
     {
         void Update()
@@ -22,16 +21,15 @@ namespace LaneShifter
             if ((Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift))
                 && Input.GetKeyDown(KeyCode.L))
             {
-                if (!object.ReferenceEquals(ToolsModifierControl.toolController, null)
-                    && !object.ReferenceEquals(LaneShiftTool.Instance, null))
-                {
-                    if (object.ReferenceEquals(
-                            ToolsModifierControl.toolController.CurrentTool,
-                            LaneShiftTool.Instance))
-                        LaneShiftTool.DisableTool();
-                    else
-                        LaneShiftTool.EnableTool();
-                }
+                if (object.ReferenceEquals(ToolsModifierControl.toolController, null)) return;
+                if (object.ReferenceEquals(LaneShiftTool.Instance, null)) return;
+
+                if (object.ReferenceEquals(
+                        ToolsModifierControl.toolController.CurrentTool,
+                        LaneShiftTool.Instance))
+                    LaneShiftTool.DisableTool();
+                else
+                    LaneShiftTool.EnableTool();
             }
         }
     }
@@ -41,7 +39,6 @@ namespace LaneShifter
         private const string HARMONY_ID = "com.jonmonaghan.laneshifter";
         private Harmony    _harmony;
         private GameObject _hotkeyObj;
-        private UIPanel    _floatPanel;
 
         public override void OnCreated(ILoading loading)
         {
@@ -70,9 +67,10 @@ namespace LaneShifter
             UnityEngine.Object.DontDestroyOnLoad(_hotkeyObj);
             _hotkeyObj.AddComponent<LaneShiftHotkeyMonitor>();
 
-            // Always create the floating button; UUI will ALSO add its own
-            // button if installed, giving two ways to activate the tool.
-            _floatPanel = CreateFloatingButton();
+            // Standalone button: always created, same pattern as ThemeMixer's UIToggle
+            UIView.GetAView().AddUIComponent(typeof(LaneShiftButton));
+
+            // Also try UUI so it shows up there too if installed
             TryRegisterWithUUI();
         }
 
@@ -80,11 +78,8 @@ namespace LaneShifter
         {
             LaneShiftPanel.Destroy();
 
-            if (!object.ReferenceEquals(_floatPanel, null))
-            {
-                UnityEngine.Object.Destroy(_floatPanel.gameObject);
-                _floatPanel = null;
-            }
+            if (!object.ReferenceEquals(LaneShiftButton.Instance, null))
+                UnityEngine.Object.Destroy(LaneShiftButton.Instance.gameObject);
 
             if (!object.ReferenceEquals(_hotkeyObj, null))
             {
@@ -101,7 +96,7 @@ namespace LaneShifter
             _harmony?.UnpatchAll(HARMONY_ID);
         }
 
-        // ---- UnifiedUI ----
+        // ---- UnifiedUI (optional) ----
         private static void TryRegisterWithUUI()
         {
             try
@@ -109,8 +104,7 @@ namespace LaneShifter
                 Type helpers = null;
                 foreach (Assembly asm in AppDomain.CurrentDomain.GetAssemblies())
                 {
-                    if (string.Equals(asm.GetName().Name, "UnifiedUILib",
-                                      StringComparison.Ordinal))
+                    if (string.Equals(asm.GetName().Name, "UnifiedUILib", StringComparison.Ordinal))
                     {
                         helpers = asm.GetType("UnifiedUI.Helpers.UUIHelpers");
                         break;
@@ -118,115 +112,56 @@ namespace LaneShifter
                 }
                 if (object.ReferenceEquals(helpers, null))
                 {
-                    Debug.Log("[LaneShifter] UnifiedUILib not found.");
+                    Debug.Log("[LaneShifter] UUI not present.");
                     return;
                 }
 
-                // Enumerate all overloads of RegisterToolButton and pick
-                // the one that accepts a ToolBase parameter.
+                // Find RegisterToolButton overload that accepts a ToolBase
                 MethodInfo register = null;
-                MethodInfo[] methods = helpers.GetMethods(
-                    BindingFlags.Public | BindingFlags.Static);
-                foreach (MethodInfo m in methods)
+                foreach (MethodInfo m in helpers.GetMethods(BindingFlags.Public | BindingFlags.Static))
                 {
-                    if (!string.Equals(m.Name, "RegisterToolButton",
-                                       StringComparison.Ordinal))
+                    if (!string.Equals(m.Name, "RegisterToolButton", StringComparison.Ordinal))
                         continue;
-                    ParameterInfo[] parms = m.GetParameters();
-                    bool hasTool = false;
-                    foreach (ParameterInfo p in parms)
+                    foreach (ParameterInfo p in m.GetParameters())
+                    {
                         if (typeof(ToolBase).IsAssignableFrom(p.ParameterType))
-                            hasTool = true;
-                    if (hasTool) { register = m; break; }
+                        {
+                            register = m;
+                            break;
+                        }
+                    }
+                    if (!object.ReferenceEquals(register, null)) break;
                 }
 
                 if (object.ReferenceEquals(register, null))
                 {
-                    Debug.LogWarning("[LaneShifter] No RegisterToolButton overload found.");
+                    Debug.LogWarning("[LaneShifter] UUI: RegisterToolButton not found.");
                     return;
                 }
 
-                // Build argument list to match whatever the method expects.
-                ParameterInfo[] ps = register.GetParameters();
-                object[] args = new object[ps.Length];
-                Texture2D[] icons = new Texture2D[] { LoadIcon() };
+                // Build args list matching whatever overload was found
+                ParameterInfo[] ps   = register.GetParameters();
+                object[]        args = new object[ps.Length];
+                Texture2D[]     icons = new Texture2D[] { LoadIcon() };
 
                 for (int i = 0; i < ps.Length; i++)
                 {
                     Type pt = ps[i].ParameterType;
-                    if (pt == typeof(string) && i == 0) args[i] = "LaneShifter";
-                    else if (pt == typeof(string) && i == 1) args[i] = null; // groupName
-                    else if (pt == typeof(string))           args[i] = "Lane Shifter (Shift+L)";
-                    else if (typeof(ToolBase).IsAssignableFrom(pt)) args[i] = LaneShiftTool.Instance;
-                    else if (pt == typeof(Texture2D[]))      args[i] = icons;
-                    else if (pt == typeof(Texture2D))        args[i] = icons[0];
-                    else                                     args[i] = null; // optional params
+                    if (pt == typeof(string) && i == 0)                   args[i] = "LaneShifter";
+                    else if (pt == typeof(string) && i == 1)              args[i] = null;
+                    else if (pt == typeof(string))                        args[i] = "Lane Shifter (Shift+L)";
+                    else if (typeof(ToolBase).IsAssignableFrom(pt))       args[i] = LaneShiftTool.Instance;
+                    else if (pt == typeof(Texture2D[]))                   args[i] = icons;
+                    else if (pt == typeof(Texture2D))                     args[i] = icons[0];
+                    else                                                  args[i] = null;
                 }
 
                 object result = register.Invoke(null, args);
-                Debug.Log("[LaneShifter] UUI registration result: " + result);
+                Debug.Log("[LaneShifter] UUI registered: " + result);
             }
             catch (Exception ex)
             {
-                Debug.LogWarning("[LaneShifter] UUI registration error: " + ex);
-            }
-        }
-
-        // ---- Floating button ----
-        // Positioned in the top-left below the main toolbar (~60px from top)
-        private static UIPanel CreateFloatingButton()
-        {
-            try
-            {
-                UIView view = UIView.GetAView();
-                UIPanel wrapper = view.AddUIComponent<UIPanel>();
-                wrapper.width            = 42f;
-                wrapper.height           = 42f;
-                wrapper.backgroundSprite = "GenericPanel";
-                wrapper.opacity          = 0.9f;
-                // Top-left corner, below the main toolbar
-                wrapper.absolutePosition = new Vector3(12f, 62f);
-                wrapper.tooltip          = "Lane Shifter (Shift+L)";
-                wrapper.BringToFront();
-
-                UIDragHandle drag = wrapper.AddUIComponent<UIDragHandle>();
-                drag.width           = 42f;
-                drag.height          = 42f;
-                drag.relativePosition = Vector3.zero;
-                drag.target          = wrapper;
-
-                UIButton btn = wrapper.AddUIComponent<UIButton>();
-                btn.width            = 36f;
-                btn.height           = 36f;
-                btn.relativePosition = new Vector3(3f, 3f);
-                btn.tooltip          = "Lane Shifter (Shift+L)";
-                btn.text             = "LS";
-                btn.textScale        = 0.75f;
-                btn.textColor        = Color.white;
-                btn.normalBgSprite   = "OptionBase";
-                btn.hoveredBgSprite  = "OptionBaseHovered";
-                btn.pressedBgSprite  = "OptionBasePressed";
-                btn.focusedBgSprite  = "OptionBaseFocused";
-
-                btn.eventClicked += (_, __) =>
-                {
-                    if (object.ReferenceEquals(LaneShiftTool.Instance, null)) return;
-                    if (object.ReferenceEquals(ToolsModifierControl.toolController, null)) return;
-                    if (object.ReferenceEquals(
-                            ToolsModifierControl.toolController.CurrentTool,
-                            LaneShiftTool.Instance))
-                        LaneShiftTool.DisableTool();
-                    else
-                        LaneShiftTool.EnableTool();
-                };
-
-                Debug.Log("[LaneShifter] Floating button created at top-left.");
-                return wrapper;
-            }
-            catch (Exception ex)
-            {
-                Debug.LogError("[LaneShifter] Floating button error: " + ex);
-                return null;
+                Debug.LogWarning("[LaneShifter] UUI error: " + ex);
             }
         }
 
@@ -235,8 +170,8 @@ namespace LaneShifter
         {
             try
             {
-                Assembly asm = Assembly.GetExecutingAssembly();
-                Stream s = asm.GetManifestResourceStream("LaneShifter.icon.png");
+                System.IO.Stream s = Assembly.GetExecutingAssembly()
+                    .GetManifestResourceStream("LaneShifter.icon.png");
                 if (!object.ReferenceEquals(s, null))
                 {
                     using (s)
@@ -249,11 +184,8 @@ namespace LaneShifter
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                Debug.LogWarning("[LaneShifter] icon.png: " + ex.Message);
-            }
-            // Fallback: solid green square
+            catch { }
+
             Texture2D fallback = new Texture2D(32, 32, TextureFormat.RGBA32, false);
             Color32   fill     = new Color32(80, 200, 120, 255);
             for (int y = 0; y < 32; y++)
