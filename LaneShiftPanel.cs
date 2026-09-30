@@ -193,7 +193,7 @@ namespace LaneShifter
                 // Helper: add offset and refresh field
                 void ApplyDelta(float delta)
                 {
-                    float next = System.Math.Round(mgr.GetShift(capturedLane) + delta, 2);
+                    float next = (float)System.Math.Round(mgr.GetShift(capturedLane) + delta, 2);
                     mgr.SetShift(capturedLane, (float)next);
                     LaneShiftManager.UpdateSegment(capturedSeg);
                     field.text = next.ToString("F2");
