@@ -13,7 +13,9 @@
     -->
     <NoWarn>0618,1591</NoWarn>
   </PropertyGroup>
-
+<ItemGroup>
+  <PackageReference Include="Lib.Harmony" Version="2.2.2" />
+</ItemGroup>
   <!--
     Game DLLs are expected in a 'lib/' folder at the repo root.
     Typical CS1 install path:
@@ -45,14 +47,6 @@
     </Reference>
     <Reference Include="UnityEngine.UI">
       <HintPath>lib\UnityEngine.UI.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <!--
-      0Harmony.dll: either copy from lib/ or use the NuGet package.
-      Using the file reference keeps CI simple (same approach as game DLLs).
-    -->
-    <Reference Include="0Harmony">
-      <HintPath>lib\0Harmony.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
