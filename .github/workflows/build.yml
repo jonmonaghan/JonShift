@@ -21,3 +21,9 @@ jobs:
     # Added quotes around "/t:Restore;Build" to prevent PowerShell from splitting the command
     - name: Build Mod
       run: msbuild JonShift.csproj "/t:Restore;Build" /p:Configuration=Release
+
+    - name: Upload Compiled Mod Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: LaneShift-Mod-DLL
+        path: bin/Release/net472/JonShift.dll
