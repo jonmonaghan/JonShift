@@ -92,6 +92,9 @@ namespace LaneShifter
     // ---------------------------------------------------------------
     // Key capture (waits one frame then reads next non-modifier key)
     // ---------------------------------------------------------------
+    // Custom delegate — avoids Action<T1,T2,T3,T4> which is .NET 4.0+ only
+    internal delegate void KeyCaptureDelegate(KeyCode key, bool shift, bool ctrl, bool alt);
+
     internal sealed class LaneShiftKeyCapture : MonoBehaviour
     {
         // Fixed key list — avoids Enum.GetValues which can crash on old Mono
@@ -112,10 +115,10 @@ namespace LaneShifter
             KeyCode.Semicolon,KeyCode.Quote,KeyCode.Comma,KeyCode.Period,KeyCode.Slash,
         };
 
-        private Action<KeyCode, bool, bool, bool> _cb;
+        private KeyCaptureDelegate _cb;
         private bool _armed;
 
-        public static void Begin(Action<KeyCode, bool, bool, bool> callback)
+        public static void Begin(KeyCaptureDelegate callback)
         {
             var go = new GameObject("LaneShifterKeyCapture");
             var kc = go.AddComponent<LaneShiftKeyCapture>();
