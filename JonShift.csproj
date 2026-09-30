@@ -1,34 +1,60 @@
 <Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
-    <OutputType>Library</OutputType>
-    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>JonShift</AssemblyName>
+    <RootNamespace>JonShift</RootNamespace>
     <Nullable>disable</Nullable>
-    <AddFrameworkPaths>false</AddFrameworkPaths>
-    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
-    <LangVersion>7.3</LangVersion>
+    <LangVersion>9.0</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!--
+      Suppress warnings about missing XML docs and obsolete members in game DLLs.
+      CS0618 = obsolete, CS1591 = missing XML comment
+    -->
+    <NoWarn>0618,1591</NoWarn>
   </PropertyGroup>
 
+  <!--
+    Game DLLs are expected in a 'lib/' folder at the repo root.
+    Typical CS1 install path:
+      C:\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Cities_Data\Managed\
+    Copy these into your lib/ folder:
+      Assembly-CSharp.dll
+      ColossalManaged.dll
+      ICities.dll
+      UnityEngine.dll
+      UnityEngine.UI.dll
+      0Harmony.dll           (from Harmony 2.x, or use NuGet below)
+  -->
   <ItemGroup>
     <Reference Include="Assembly-CSharp">
-      <HintPath>libs\Assembly-CSharp.dll</HintPath>
-      <Private>False</Private>
+      <HintPath>lib\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
     </Reference>
     <Reference Include="ColossalManaged">
-      <HintPath>libs\ColossalManaged.dll</HintPath>
-      <Private>False</Private>
+      <HintPath>lib\ColossalManaged.dll</HintPath>
+      <Private>false</Private>
     </Reference>
     <Reference Include="ICities">
-      <HintPath>libs\ICities.dll</HintPath>
-      <Private>False</Private>
+      <HintPath>lib\ICities.dll</HintPath>
+      <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine">
-      <HintPath>libs\UnityEngine.dll</HintPath>
-      <Private>False</Private>
+      <HintPath>lib\UnityEngine.dll</HintPath>
+      <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.UI">
-      <HintPath>libs\UnityEngine.UI.dll</HintPath>
-      <Private>False</Private>
+      <HintPath>lib\UnityEngine.UI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!--
+      0Harmony.dll: either copy from lib/ or use the NuGet package.
+      Using the file reference keeps CI simple (same approach as game DLLs).
+    -->
+    <Reference Include="0Harmony">
+      <HintPath>lib\0Harmony.dll</HintPath>
+      <Private>false</Private>
     </Reference>
   </ItemGroup>
+
 </Project>
