@@ -280,23 +280,22 @@ namespace LaneShift
             {
                 string line = lines[n];
                 if (line.Length == 0) continue;
-                try
+                               try
                 {
+                    string[] p = line.Split('\t');
+                    ushort id = ushort.Parse(p[0], CultureInfo.InvariantCulture);
+                    ushort start = ushort.Parse(p[1], CultureInfo.InvariantCulture);
+                    ushort end = ushort.Parse(p[2], CultureInfo.InvariantCulture);
+                    string[] vals = p[4].Split(';');
+                    SegmentRecord r = new SegmentRecord(start, end, p[3], vals.Length);
+                    for (int i = 0; i < vals.Length; i++)
+                    {
+                        r.Shift[i] = float.Parse(vals[i], NumberStyles.Float, CultureInfo.InvariantCulture);
+                    }
+                    r.NeedsReset = true;
+                    records[id] = r;
+                }
 
-
-string[] p = line.Split('\t');
-ushort id = ushort.Parse(p[0], CultureInfo.InvariantCulture);
-ushort start = ushort.Parse(p[1], CultureInfo.InvariantCulture);
-ushort end = ushort.Parse(p[2], CultureInfo.InvariantCulture);
-string[] vals = p[4].Split(';');
-SegmentRecord r = new SegmentRecord(start, end, p[3], vals.Length);
-for (int i = 0; i < vals.Length; i++)
-{
-r.Shift[i] = float.Parse(vals[i], NumberStyles.Float, CultureInfo.InvariantCulture);
-}
-r.NeedsReset = true;
-records[id] = r;
-}
 catch (Exception ex)
 {
 Debug.LogWarning("[LaneShift] skipped bad save line: " + ex.Message);
