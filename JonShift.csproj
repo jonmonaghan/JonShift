@@ -8,12 +8,6 @@
     <ReferencePath>$(MSBuildProjectDirectory)\libs;$(ReferencePath)</ReferencePath>
   </PropertyGroup>
 
-  <!-- Explicitly include your source file -->
-  <ItemGroup>
-    <Compile Include="JonShift.cs" />
-  </ItemGroup>
-
-  <!-- Explicitly reference the game files -->
   <ItemGroup>
     <Reference Include="Assembly-CSharp">
       <HintPath>libs\Assembly-CSharp.dll</HintPath>
