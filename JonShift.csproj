@@ -4,15 +4,36 @@
     <OutputType>Library</OutputType>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>disable</Nullable>
-    <!-- Explicitly forces MSBuild to look into your local libs directory -->
+    <!-- Force MSBuild to look into your local libs directory -->
     <ReferencePath>$(MSBuildProjectDirectory)\libs;$(ReferencePath)</ReferencePath>
   </PropertyGroup>
 
+  <!-- Explicitly include your source file -->
   <ItemGroup>
-    <Reference Include="Assembly-CSharp" HintPath="libs\Assembly-CSharp.dll" Private="False" />
-    <Reference Include="ColossalManaged" HintPath="libs\ColossalManaged.dll" Private="False" />
-    <Reference Include="ICities" HintPath="libs\ICities.dll" Private="False" />
-    <Reference Include="UnityEngine" HintPath="libs\UnityEngine.dll" Private="False" />
-    <Reference Include="UnityEngine.UI" HintPath="libs\UnityEngine.UI.dll" Private="False" />
+    <Compile Include="JonShift.cs" />
+  </ItemGroup>
+
+  <!-- Explicitly reference the game files -->
+  <ItemGroup>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>libs\Assembly-CSharp.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="ColossalManaged">
+      <HintPath>libs\ColossalManaged.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="ICities">
+      <HintPath>libs\ICities.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>libs\UnityEngine.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>libs\UnityEngine.UI.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
   </ItemGroup>
 </Project>
