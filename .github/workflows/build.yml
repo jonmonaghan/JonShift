@@ -12,18 +12,12 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    # 1. Pull the code down to the virtual machine
     - name: Checkout Repository
       uses: actions/checkout@v4
 
-    # 2. Add MSBuild to the command line path
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    # 3. Generate the required project.assets.json file
-    - name: Restore Project Dependencies
-      run: dotnet restore JonShift.csproj
-
-    # 4. Compile the mod using MSBuild 
+    # We use MSBuild direct compilation while skipping asset targets to rely entirely on your local libs folder
     - name: Build Mod
-      run: msbuild JonShift.csproj /p:Configuration=Release
+      run: msbuild JonShift.csproj /p:Configuration=Release /p:ResolveNuGetPackages=false /p:SkipCompilerExecution=false
