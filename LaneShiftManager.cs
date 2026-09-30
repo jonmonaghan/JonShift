@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Xml.Serialization;
 using ColossalFramework;
+using ColossalFramework.Math;
 using UnityEngine;
 
 namespace JonShift
