@@ -20,6 +20,10 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    # 3. Compile the mod using MSBuild directly
+    # 3. Generate the required project.assets.json file
+    - name: Restore Project Dependencies
+      run: dotnet restore JonShift.csproj
+
+    # 4. Compile the mod using MSBuild 
     - name: Build Mod
-      run: msbuild /p:Configuration=Release
+      run: msbuild JonShift.csproj /p:Configuration=Release
