@@ -139,21 +139,30 @@ namespace LaneShifter
                     return;
                 }
 
-                // Build args list matching whatever overload was found
-                ParameterInfo[] ps   = register.GetParameters();
-                object[]        args = new object[ps.Length];
+                // Build args list matching whatever overload was found.
+                // Use FullName string comparisons instead of == to avoid
+                // Type.op_Equality which doesn't exist in CS1's Mono runtime.
+                ParameterInfo[] ps    = register.GetParameters();
+                object[]        args  = new object[ps.Length];
                 Texture2D[]     icons = new Texture2D[] { LoadIcon() };
 
                 for (int i = 0; i < ps.Length; i++)
                 {
-                    Type pt = ps[i].ParameterType;
-                    if (pt == typeof(string) && i == 0)                   args[i] = "LaneShifter";
-                    else if (pt == typeof(string) && i == 1)              args[i] = null;
-                    else if (pt == typeof(string))                        args[i] = "Lane Shifter (Shift+L)";
-                    else if (typeof(ToolBase).IsAssignableFrom(pt))       args[i] = LaneShiftTool.Instance;
-                    else if (pt == typeof(Texture2D[]))                   args[i] = icons;
-                    else if (pt == typeof(Texture2D))                     args[i] = icons[0];
-                    else                                                  args[i] = null;
+                    string ptName = ps[i].ParameterType.FullName;
+                    if (string.Equals(ptName, "System.String", StringComparison.Ordinal) && i == 0)
+                        args[i] = "LaneShifter";
+                    else if (string.Equals(ptName, "System.String", StringComparison.Ordinal) && i == 1)
+                        args[i] = null;
+                    else if (string.Equals(ptName, "System.String", StringComparison.Ordinal))
+                        args[i] = "Lane Shifter (Shift+L)";
+                    else if (typeof(ToolBase).IsAssignableFrom(ps[i].ParameterType))
+                        args[i] = LaneShiftTool.Instance;
+                    else if (string.Equals(ptName, "UnityEngine.Texture2D[]", StringComparison.Ordinal))
+                        args[i] = icons;
+                    else if (string.Equals(ptName, "UnityEngine.Texture2D", StringComparison.Ordinal))
+                        args[i] = icons[0];
+                    else
+                        args[i] = null;
                 }
 
                 object result = register.Invoke(null, args);
