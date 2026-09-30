@@ -731,3 +731,4 @@ if (data != null) serializableDataManager.SaveData(Key, data);
 catch (Exception ex) { Debug.LogException(ex); }
 }
 }
+}
