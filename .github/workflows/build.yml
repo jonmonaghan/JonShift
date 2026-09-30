@@ -31,7 +31,7 @@ jobs:
 
     # Step 5: Save the compiled DLL so you can download it
     - name: Upload Build Artifact
-      uses: actions/artifacts/upload-artifact@v4
+      uses: actions/upload-artifact@v4
       with:
         name: my-compiled-dll
         path: '**/bin/Release/**/*.dll'
