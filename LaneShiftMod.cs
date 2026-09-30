@@ -55,11 +55,12 @@ namespace LaneShifter
                     rebind.text = "Press a key... (Esc to clear)";
                     KeyCapture.Start((key, shift, ctrl, alt) =>
                     {
-                        LaneShiftSettings.HotkeyCode.value = (int)key;
-                        LaneShiftSettings.HotkeyShift.value = shift;
-                        LaneShiftSettings.HotkeyCtrl.value = ctrl;
-                        LaneShiftSettings.HotkeyAlt.value = alt;
+                        LaneShiftSettings.HotkeyCode = (int)key;
+                        LaneShiftSettings.HotkeyShift = shift;
+                        LaneShiftSettings.HotkeyCtrl = ctrl;
+                        LaneShiftSettings.HotkeyAlt = alt;
                         
+                        LaneShiftSettings.Save();
                         rebind.text = "Current: " + LaneShiftSettings.HotkeyDisplay();
                     });
                 };
@@ -74,12 +75,12 @@ namespace LaneShifter
             UIHelperBase visGroup = helper.AddGroup("Button Visibility");
 
             visGroup.AddCheckbox("Show in UnifiedUI toolbar (takes effect on next level load)",
-                LaneShiftSettings.ShowInUUI.value, v => { LaneShiftSettings.ShowInUUI.value = v;  });
+                LaneShiftSettings.ShowInUUI, v => { LaneShiftSettings.ShowInUUI = v; LaneShiftSettings.Save(); });
 
             visGroup.AddCheckbox("Show standalone button on screen",
-                LaneShiftSettings.ShowStandaloneButton.value, v =>
+                LaneShiftSettings.ShowStandaloneButton, v =>
                 {
-                    LaneShiftSettings.ShowStandaloneButton.value = v;
+                    LaneShiftSettings.ShowStandaloneButton = v; LaneShiftSettings.Save();
                     
                     if (!object.ReferenceEquals(LaneShiftButton.Instance, null))
                         LaneShiftButton.Instance.isVisible = v;
@@ -116,6 +117,7 @@ namespace LaneShifter
 
         public override void OnCreated(ILoading loading)
         {
+            LaneShiftSettings.Load();
             _harmony = new Harmony(HARMONY_ID);
             _harmony.PatchAll(Assembly.GetExecutingAssembly());
         }
@@ -140,7 +142,7 @@ namespace LaneShifter
 
             UIView.GetAView().AddUIComponent(typeof(LaneShiftButton));
 
-            if (LaneShiftSettings.ShowInUUI.value)
+            if (LaneShiftSettings.ShowInUUI)
                 TryRegisterWithUUI();
         }
 

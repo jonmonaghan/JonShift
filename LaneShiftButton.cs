@@ -57,7 +57,7 @@ namespace LaneShifter
             drag.relativePosition = Vector3.zero;
             drag.target           = this;
 
-            isVisible = LaneShiftSettings.ShowStandaloneButton.value;
+            isVisible = LaneShiftSettings.ShowStandaloneButton;
 
             eventClicked += (c, p) =>
             {

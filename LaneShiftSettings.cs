@@ -1,50 +1,103 @@
 // LaneShiftSettings.cs
-// Uses ColossalFramework SavedInt/SavedBool — the standard CS1 settings pattern.
-// Values are persisted automatically; no explicit Save() call needed.
-using ColossalFramework;
+// Plain key=value text file. No XmlSerializer, no ColossalFramework types.
+// Works on any Mono/.NET version CS1 ships with.
+using System;
+using System.Collections.Generic;
+using System.IO;
 using UnityEngine;
 
 namespace LaneShifter
 {
     public static class LaneShiftSettings
     {
-        private const string FILE_NAME = "LaneShifter";
+        // Hotkey (default = unbound)
+        public static int  HotkeyCode  = (int)KeyCode.None;
+        public static bool HotkeyShift = false;
+        public static bool HotkeyCtrl  = false;
+        public static bool HotkeyAlt   = false;
 
-        // Hotkey
-        public static readonly SavedInt  HotkeyCode  = new SavedInt(  "hotkeyCode",  FILE_NAME, (int)KeyCode.None, true);
-        public static readonly SavedBool HotkeyShift = new SavedBool( "hotkeyShift", FILE_NAME, false,             true);
-        public static readonly SavedBool HotkeyCtrl  = new SavedBool( "hotkeyCtrl",  FILE_NAME, false,             true);
-        public static readonly SavedBool HotkeyAlt   = new SavedBool( "hotkeyAlt",   FILE_NAME, false,             true);
+        // UI
+        public static bool ShowInUUI            = true;
+        public static bool ShowStandaloneButton  = true;
 
-        // UI visibility
-        public static readonly SavedBool ShowInUUI            = new SavedBool("showInUUI",            FILE_NAME, true, true);
-        public static readonly SavedBool ShowStandaloneButton = new SavedBool("showStandaloneButton", FILE_NAME, true, true);
+        private static string SettingsPath =>
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Colossal Order", "Cities_Skylines", "LaneShifterSettings.txt");
 
-        // Helper: check if the configured hotkey is currently pressed
+        // ---- Persistence ----
+        public static void Save()
+        {
+            try
+            {
+                string[] lines =
+                {
+                    "HotkeyCode="  + HotkeyCode,
+                    "HotkeyShift=" + HotkeyShift,
+                    "HotkeyCtrl="  + HotkeyCtrl,
+                    "HotkeyAlt="   + HotkeyAlt,
+                    "ShowInUUI="            + ShowInUUI,
+                    "ShowStandaloneButton=" + ShowStandaloneButton,
+                };
+                File.WriteAllLines(SettingsPath, lines);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[LaneShifter] Settings save error: " + ex.Message);
+            }
+        }
+
+        public static void Load()
+        {
+            try
+            {
+                if (!File.Exists(SettingsPath)) return;
+                foreach (string rawLine in File.ReadAllLines(SettingsPath))
+                {
+                    string line = rawLine.Trim();
+                    int eq = line.IndexOf('=');
+                    if (eq < 0) continue;
+                    string key = line.Substring(0, eq).Trim();
+                    string val = line.Substring(eq + 1).Trim();
+                    switch (key)
+                    {
+                        case "HotkeyCode":           int.TryParse(val,  out HotkeyCode);           break;
+                        case "HotkeyShift":          bool.TryParse(val, out HotkeyShift);          break;
+                        case "HotkeyCtrl":           bool.TryParse(val, out HotkeyCtrl);           break;
+                        case "HotkeyAlt":            bool.TryParse(val, out HotkeyAlt);            break;
+                        case "ShowInUUI":            bool.TryParse(val, out ShowInUUI);            break;
+                        case "ShowStandaloneButton": bool.TryParse(val, out ShowStandaloneButton); break;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[LaneShifter] Settings load error: " + ex.Message);
+            }
+        }
+
+        // ---- Helpers ----
         public static bool IsHotkeyPressed()
         {
-            if (HotkeyCode.value == (int)KeyCode.None) return false;
-            if (!Input.GetKeyDown((KeyCode)HotkeyCode.value)) return false;
-
+            if (HotkeyCode == (int)KeyCode.None) return false;
+            if (!Input.GetKeyDown((KeyCode)HotkeyCode)) return false;
             bool shift = Input.GetKey(KeyCode.LeftShift)   || Input.GetKey(KeyCode.RightShift);
             bool ctrl  = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
             bool alt   = Input.GetKey(KeyCode.LeftAlt)     || Input.GetKey(KeyCode.RightAlt);
-
-            if (HotkeyShift.value != shift) return false;
-            if (HotkeyCtrl.value  != ctrl)  return false;
-            if (HotkeyAlt.value   != alt)   return false;
+            if (HotkeyShift != shift) return false;
+            if (HotkeyCtrl  != ctrl)  return false;
+            if (HotkeyAlt   != alt)   return false;
             return true;
         }
 
-        // Helper: human-readable key binding string for UI display
         public static string HotkeyDisplay()
         {
-            if (HotkeyCode.value == (int)KeyCode.None) return "(unbound)";
+            if (HotkeyCode == (int)KeyCode.None) return "(unbound)";
             string s = "";
-            if (HotkeyCtrl.value)  s += "Ctrl+";
-            if (HotkeyShift.value) s += "Shift+";
-            if (HotkeyAlt.value)   s += "Alt+";
-            s += ((KeyCode)HotkeyCode.value).ToString();
+            if (HotkeyCtrl)  s += "Ctrl+";
+            if (HotkeyShift) s += "Shift+";
+            if (HotkeyAlt)   s += "Alt+";
+            s += ((KeyCode)HotkeyCode).ToString();
             return s;
         }
     }
