@@ -68,49 +68,48 @@ namespace LaneShifter
         }
 
         // ---- UnifiedUI (optional, detected via reflection) ----
-        private static bool TryRegisterWithUUI()
+private static bool TryRegisterWithUUI()
+{
+    try
+    {
+        // Don't compare Assembly objects with == — op_Equality doesn't
+        // exist in CS1's Mono runtime. Search by name, grab the Type directly.
+        Type helpers = null;
+        foreach (Assembly asm in AppDomain.CurrentDomain.GetAssemblies())
         {
-            try
+            if (string.Equals(asm.GetName().Name, "UnifiedUILib", StringComparison.Ordinal))
             {
-                Assembly uui = null;
-                foreach (Assembly asm in AppDomain.CurrentDomain.GetAssemblies())
-                {
-                    if (asm.GetName().Name == "UnifiedUILib")
-                    {
-                        uui = asm;
-                        break;
-                    }
-                }
-                if (uui == null) return false;
-
-                Type helpers = uui.GetType("UnifiedUI.Helpers.UUIHelpers");
-                if (helpers == null) return false;
-
-                MethodInfo register = helpers.GetMethod(
-                    "RegisterToolButton",
-                    new[] { typeof(string), typeof(string), typeof(string),
-                            typeof(ToolBase), typeof(Texture2D) });
-                if (register == null) return false;
-
-                Texture2D icon = LoadIcon();
-                register.Invoke(null, new object[]
-                {
-                    "LaneShifter",
-                    null,
-                    "Lane Shifter",
-                    LaneShiftTool.Instance,
-                    icon
-                });
-
-                Debug.Log("[LaneShifter] Registered with UnifiedUI.");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning("[LaneShifter] UUI registration skipped: " + ex.Message);
-                return false;
+                helpers = asm.GetType("UnifiedUI.Helpers.UUIHelpers");
+                break;
             }
         }
+        if (helpers == null) return false;   // Type comparison — safe on Mono
+
+        MethodInfo register = helpers.GetMethod(
+            "RegisterToolButton",
+            new[] { typeof(string), typeof(string), typeof(string),
+                    typeof(ToolBase), typeof(Texture2D) });
+        if (register == null) return false;
+
+        Texture2D icon = LoadIcon();
+        register.Invoke(null, new object[]
+        {
+            "LaneShifter",
+            null,
+            "Lane Shifter",
+            LaneShiftTool.Instance,
+            icon
+        });
+
+        Debug.Log("[LaneShifter] Registered with UnifiedUI.");
+        return true;
+    }
+    catch (Exception ex)
+    {
+        Debug.LogWarning("[LaneShifter] UUI registration skipped: " + ex.Message);
+        return false;
+    }
+}
 
         // ---- Standalone toolbar button (fallback when UUI not present) ----
         private static UIButton AddStandaloneButton()
