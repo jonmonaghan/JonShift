@@ -72,8 +72,6 @@ private static bool TryRegisterWithUUI()
 {
     try
     {
-        // Don't compare Assembly objects with == — op_Equality doesn't
-        // exist in CS1's Mono runtime. Search by name, grab the Type directly.
         Type helpers = null;
         foreach (Assembly asm in AppDomain.CurrentDomain.GetAssemblies())
         {
@@ -83,13 +81,14 @@ private static bool TryRegisterWithUUI()
                 break;
             }
         }
-        if (helpers == null) return false;   // Type comparison — safe on Mono
+        // Use ReferenceEquals — avoids Type.op_Equality which Mono doesn't have
+        if (object.ReferenceEquals(helpers, null)) return false;
 
         MethodInfo register = helpers.GetMethod(
             "RegisterToolButton",
             new[] { typeof(string), typeof(string), typeof(string),
                     typeof(ToolBase), typeof(Texture2D) });
-        if (register == null) return false;
+        if (object.ReferenceEquals(register, null)) return false;
 
         Texture2D icon = LoadIcon();
         register.Invoke(null, new object[]
