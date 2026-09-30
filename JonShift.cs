@@ -531,7 +531,21 @@ namespace LaneShift
         public static void Create()
         {
             UIView view = UIView.GetAView();
-            button = LaneShiftUI.MakeButton((UIComponent)view, "Lane Shift", 90f, 28f, new Vector3(10f, 90f));
+            // Attach the component directly to the global UIView GameObject
+            button = (UIButton)view.gameObject.AddComponent(typeof(UIButton));
+            button.text = "Lane Shift";
+            button.width = 90f;
+            button.height = 28f;
+            button.relativePosition = new Vector3(10f, 90f);
+            button.normalBgSprite = "ButtonMenu";
+            button.hoveredBgSprite = "ButtonMenuHovered";
+            button.pressedBgSprite = "ButtonMenuPressed";
+            button.disabledBgSprite = "ButtonMenuDisabled";
+            button.textColor = new Color32(255, 255, 255, 255);
+            button.textScale = 0.9f;
+            button.textHorizontalAlignment = UIHorizontalAlignment.Center;
+            button.textVerticalAlignment = UIVerticalAlignment.Middle;
+            
             button.name = "LaneShiftButton";
             button.eventClick += delegate (UIComponent c, UIMouseEventParameter p) { LaneShiftTool.Toggle(); };
         }
@@ -545,6 +559,7 @@ namespace LaneShift
             }
         }
     }
+
 
     public class LaneShiftKeys : MonoBehaviour
     {
