@@ -10,30 +10,101 @@ namespace LaneShifter
     public class LaneShiftMod : IUserMod
     {
         public string Name        => "Lane Shifter";
-        public string Description => "Shift individual road lanes laterally. Hotkey: Shift+L";
-    }
+        public string Description => "Shift individual road lanes laterally.";
 
-    // Always-on hotkey monitor (active even when Lane Shifter tool is not selected)
-    public class LaneShiftHotkeyMonitor : MonoBehaviour
-    {
-        void Update()
+        public void OnSettingsUI(UIHelperBase helper)
         {
-            if ((Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift))
-                && Input.GetKeyDown(KeyCode.L))
-            {
-                if (object.ReferenceEquals(ToolsModifierControl.toolController, null)) return;
-                if (object.ReferenceEquals(LaneShiftTool.Instance, null)) return;
+            var cfg = LaneShiftSettings.Instance;
 
-                if (object.ReferenceEquals(
-                        ToolsModifierControl.toolController.CurrentTool,
-                        LaneShiftTool.Instance))
-                    LaneShiftTool.DisableTool();
-                else
-                    LaneShiftTool.EnableTool();
+            // ---- Hotkey ----
+            UIHelperBase hotkeyGroup = helper.AddGroup("Hotkey");
+
+            // Modifier checkboxes
+            hotkeyGroup.AddCheckbox("Ctrl",  cfg.HotkeyCtrl,  v => { cfg.HotkeyCtrl  = v; cfg.Save(); });
+            hotkeyGroup.AddCheckbox("Shift", cfg.HotkeyShift, v => { cfg.HotkeyShift = v; cfg.Save(); });
+            hotkeyGroup.AddCheckbox("Alt",   cfg.HotkeyAlt,   v => { cfg.HotkeyAlt   = v; cfg.Save(); });
+
+            // Key dropdown — common keys
+            string[] keys = new string[]
+            {
+                "(unbound)",
+                "A","B","C","D","E","F","G","H","I","J","K","L","M",
+                "N","O","P","Q","R","S","T","U","V","W","X","Y","Z",
+                "F1","F2","F3","F4","F5","F6","F7","F8","F9","F10","F11","F12",
+                "Alpha1","Alpha2","Alpha3","Alpha4","Alpha5",
+                "Alpha6","Alpha7","Alpha8","Alpha9","Alpha0",
+                "Tab","BackQuote","Minus","Equals","LeftBracket","RightBracket",
+                "Backslash","Semicolon","Quote","Comma","Period","Slash"
+            };
+
+            // Find current selection index
+            int currentIdx = 0;
+            if (cfg.HotkeyCode != (int)UnityEngine.KeyCode.None)
+            {
+                string currentName = ((UnityEngine.KeyCode)cfg.HotkeyCode).ToString();
+                for (int i = 1; i < keys.Length; i++)
+                {
+                    if (string.Equals(keys[i], currentName, StringComparison.Ordinal))
+                    {
+                        currentIdx = i;
+                        break;
+                    }
+                }
             }
+
+            hotkeyGroup.AddDropdown("Key", keys, currentIdx, sel =>
+            {
+                if (sel == 0)
+                    cfg.HotkeyCode = (int)UnityEngine.KeyCode.None;
+                else
+                {
+                    try   { cfg.HotkeyCode = (int)Enum.Parse(typeof(UnityEngine.KeyCode), keys[sel]); }
+                    catch { cfg.HotkeyCode = (int)UnityEngine.KeyCode.None; }
+                }
+                cfg.Save();
+            });
+
+            // ---- Button Visibility ----
+            UIHelperBase visGroup = helper.AddGroup("Button Visibility");
+
+            visGroup.AddCheckbox("Show in UnifiedUI toolbar", cfg.ShowInUUI, v =>
+            {
+                cfg.ShowInUUI = v;
+                cfg.Save();
+                // Live update not possible for UUI (registered at level load); takes effect on next load.
+            });
+
+            visGroup.AddCheckbox("Show standalone button on screen", cfg.ShowStandaloneButton, v =>
+            {
+                cfg.ShowStandaloneButton = v;
+                cfg.Save();
+                if (!object.ReferenceEquals(LaneShiftButton.Instance, null))
+                    LaneShiftButton.Instance.isVisible = v;
+            });
         }
     }
 
+    // ---------------------------------------------------------------
+    // Hotkey monitor — reads settings every frame, no hardcoded key
+    // ---------------------------------------------------------------
+    public class LaneShiftHotkeyMonitor : UnityEngine.MonoBehaviour
+    {
+        void Update()
+        {
+            if (!LaneShiftSettings.Instance.IsHotkeyPressed()) return;
+            if (object.ReferenceEquals(ToolsModifierControl.toolController, null)) return;
+            if (object.ReferenceEquals(LaneShiftTool.Instance, null)) return;
+
+            if (object.ReferenceEquals(ToolsModifierControl.toolController.CurrentTool, LaneShiftTool.Instance))
+                LaneShiftTool.DisableTool();
+            else
+                LaneShiftTool.EnableTool();
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Loading extension
+    // ---------------------------------------------------------------
     public class LaneShiftLoading : LoadingExtensionBase
     {
         private const string HARMONY_ID = "com.jonmonaghan.laneshifter";
@@ -62,16 +133,16 @@ namespace LaneShifter
             LaneShiftTool.Create();
             LaneShiftPanel.Create();
 
-            // Hotkey monitor
             _hotkeyObj = new GameObject("LaneShifterHotkey");
             UnityEngine.Object.DontDestroyOnLoad(_hotkeyObj);
             _hotkeyObj.AddComponent<LaneShiftHotkeyMonitor>();
 
-            // Standalone button: always created, same pattern as ThemeMixer's UIToggle
+            // Standalone button — always added, visibility controlled by settings
             UIView.GetAView().AddUIComponent(typeof(LaneShiftButton));
 
-            // Also try UUI so it shows up there too if installed
-            TryRegisterWithUUI();
+            // UUI — only register if setting is on
+            if (LaneShiftSettings.Instance.ShowInUUI)
+                TryRegisterWithUUI();
         }
 
         public override void OnLevelUnloading()
@@ -96,11 +167,12 @@ namespace LaneShifter
             _harmony?.UnpatchAll(HARMONY_ID);
         }
 
-        // ---- UnifiedUI (optional) ----
+        // ---- UUI registration ----
         private static void TryRegisterWithUUI()
         {
             try
             {
+                // Find UnifiedUILib assembly
                 Type helpers = null;
                 foreach (Assembly asm in AppDomain.CurrentDomain.GetAssemblies())
                 {
@@ -116,63 +188,94 @@ namespace LaneShifter
                     return;
                 }
 
-                // Find RegisterToolButton overload that accepts a ToolBase
-                MethodInfo register = null;
+                // Pick the RegisterToolButton overload that takes Texture2D[] — NOT the string
+                // icon-path overload.  We iterate all overloads, require a ToolBase parameter,
+                // and prefer the one that also has a Texture2D[] parameter.
+                MethodInfo bestWithTex  = null;
+                MethodInfo bestNoTex    = null;
+
                 foreach (MethodInfo m in helpers.GetMethods(BindingFlags.Public | BindingFlags.Static))
                 {
                     if (!string.Equals(m.Name, "RegisterToolButton", StringComparison.Ordinal))
                         continue;
+
+                    bool hasToolBase = false;
+                    bool hasTexArr   = false;
+
                     foreach (ParameterInfo p in m.GetParameters())
                     {
                         if (typeof(ToolBase).IsAssignableFrom(p.ParameterType))
-                        {
-                            register = m;
-                            break;
-                        }
+                            hasToolBase = true;
+
+                        // Texture2D[] FullName = "UnityEngine.Texture2D[]"
+                        if (string.Equals(p.ParameterType.FullName,
+                                          "UnityEngine.Texture2D[]",
+                                          StringComparison.Ordinal))
+                            hasTexArr = true;
                     }
-                    if (!object.ReferenceEquals(register, null)) break;
+
+                    if (!hasToolBase) continue;
+
+                    if (hasTexArr)
+                        bestWithTex = m;
+                    else
+                        bestNoTex   = m;
                 }
+
+                // Strongly prefer the Texture2D[] overload
+                MethodInfo register = !object.ReferenceEquals(bestWithTex, null)
+                    ? bestWithTex : bestNoTex;
 
                 if (object.ReferenceEquals(register, null))
                 {
-                    Debug.LogWarning("[LaneShifter] UUI: RegisterToolButton not found.");
+                    Debug.LogWarning("[LaneShifter] UUI: no RegisterToolButton overload found.");
                     return;
                 }
 
-                // Build args list matching whatever overload was found.
-                // Use FullName string comparisons instead of == to avoid
-                // Type.op_Equality which doesn't exist in CS1's Mono runtime.
-                ParameterInfo[] ps    = register.GetParameters();
-                object[]        args  = new object[ps.Length];
-                Texture2D[]     icons = new Texture2D[] { LoadIcon() };
+                // Log which overload we chose
+                ParameterInfo[] ps  = register.GetParameters();
+                System.Text.StringBuilder sb = new System.Text.StringBuilder();
+                foreach (ParameterInfo pi in ps) { sb.Append(pi.ParameterType.Name); sb.Append(' '); }
+                Debug.Log("[LaneShifter] UUI overload chosen: (" + sb.ToString().Trim() + ")");
+
+                // Build args — use FullName comparisons only (no Type ==)
+                object[]  args  = new object[ps.Length];
+                Texture2D icon  = LoadIcon();
+                Texture2D[] iconArr = new Texture2D[] { icon };
+                int stringIdx = 0;
 
                 for (int i = 0; i < ps.Length; i++)
                 {
-                    string ptName = ps[i].ParameterType.FullName;
-                    if (string.Equals(ptName, "System.String", StringComparison.Ordinal) && i == 0)
-                        args[i] = "LaneShifter";
-                    else if (string.Equals(ptName, "System.String", StringComparison.Ordinal) && i == 1)
-                        args[i] = null;
-                    else if (string.Equals(ptName, "System.String", StringComparison.Ordinal))
-                        args[i] = "Lane Shifter (Shift+L)";
+                    string ptFull = ps[i].ParameterType.FullName;
+
+                    if (string.Equals(ptFull, "System.String", StringComparison.Ordinal))
+                    {
+                        // Strings in order: name, groupName, tooltip
+                        if      (stringIdx == 0) args[i] = "LaneShifter";
+                        else if (stringIdx == 1) args[i] = null; // groupName
+                        else                     args[i] = "Lane Shifter"; // tooltip — NO parenthetical
+                        stringIdx++;
+                    }
                     else if (typeof(ToolBase).IsAssignableFrom(ps[i].ParameterType))
+                    {
                         args[i] = LaneShiftTool.Instance;
-                    else if (string.Equals(ptName, "UnityEngine.Texture2D[]", StringComparison.Ordinal))
-                        args[i] = icons;
-                    else if (string.Equals(ptName, "UnityEngine.Texture2D", StringComparison.Ordinal))
-                        args[i] = icons[0];
+                    }
+                    else if (string.Equals(ptFull, "UnityEngine.Texture2D[]", StringComparison.Ordinal))
+                    {
+                        args[i] = iconArr;
+                    }
+                    else if (string.Equals(ptFull, "UnityEngine.Texture2D", StringComparison.Ordinal))
+                    {
+                        args[i] = icon;
+                    }
                     else
+                    {
                         args[i] = null;
+                    }
                 }
 
-                // Log the full method signature to help debug icon issues
-                ParameterInfo[] dbg = register.GetParameters();
-                string sig = "";
-                for (int d = 0; d < dbg.Length; d++) sig += dbg[d].ParameterType.Name + " ";
-                Debug.Log("[LaneShifter] Calling UUI: " + register.Name + "(" + sig.Trim() + ")");
-
                 object result = register.Invoke(null, args);
-                Debug.Log("[LaneShifter] UUI registered: " + result);
+                Debug.Log("[LaneShifter] UUI registered OK: " + result);
             }
             catch (Exception ex)
             {
@@ -180,40 +283,38 @@ namespace LaneShifter
             }
         }
 
-        // ---- Icon ----
-        // Loads icon.png from the same folder as the DLL (standard CS1 pattern).
-        // Copy icon.png next to LaneShifter.dll in your Mods folder.
+        // ---- Icon: load from mod folder (next to the DLL) ----
         private static Texture2D LoadIcon()
         {
             try
             {
                 string modFolder = System.IO.Path.GetDirectoryName(
                     Assembly.GetExecutingAssembly().Location);
-                string iconPath  = System.IO.Path.Combine(modFolder, "icon.png");
+                string iconPath = System.IO.Path.Combine(modFolder, "icon.png");
 
                 if (System.IO.File.Exists(iconPath))
                 {
                     byte[]    buf = System.IO.File.ReadAllBytes(iconPath);
                     Texture2D tex = new Texture2D(40, 40, TextureFormat.ARGB32, false);
                     tex.LoadImage(buf);
-                    Debug.Log("[LaneShifter] Icon loaded from: " + iconPath);
+                    Debug.Log("[LaneShifter] icon loaded from " + iconPath);
                     return tex;
                 }
-                Debug.LogWarning("[LaneShifter] icon.png not found at: " + iconPath);
+                Debug.LogWarning("[LaneShifter] icon.png not found at " + iconPath);
             }
             catch (Exception ex)
             {
-                Debug.LogWarning("[LaneShifter] Icon load error: " + ex.Message);
+                Debug.LogWarning("[LaneShifter] icon load error: " + ex.Message);
             }
 
             // Fallback: solid green square
-            Texture2D fallback = new Texture2D(32, 32, TextureFormat.RGBA32, false);
-            Color32   fill     = new Color32(80, 200, 120, 255);
+            Texture2D fb   = new Texture2D(32, 32, TextureFormat.RGBA32, false);
+            Color32   fill = new Color32(80, 200, 120, 255);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
-                    fallback.SetPixel(x, y, fill);
-            fallback.Apply();
-            return fallback;
+                    fb.SetPixel(x, y, fill);
+            fb.Apply();
+            return fb;
         }
     }
 }
