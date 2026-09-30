@@ -7,7 +7,6 @@
     <AddFrameworkPaths>false</AddFrameworkPaths>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <LangVersion>7.3</LangVersion>
-    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
 
   <ItemGroup>
@@ -27,15 +26,9 @@
       <HintPath>libs\UnityEngine.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>libs\UnityEngine.UI.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
   </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="CitiesHarmony.API" Version="2.2.0" />
-  </ItemGroup>
-
-  <!-- CitiesHarmony.Harmony.dll is supplied by the shared CitiesHarmony mod;
-       only the API assembly should travel with this mod. -->
-  <Target Name="RemoveCitiesHarmonyRuntime" AfterTargets="Build">
-    <Delete Files="$(TargetDir)CitiesHarmony.Harmony.dll" />
-  </Target>
 </Project>
