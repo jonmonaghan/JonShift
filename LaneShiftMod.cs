@@ -165,6 +165,12 @@ namespace LaneShifter
                         args[i] = null;
                 }
 
+                // Log the full method signature to help debug icon issues
+                ParameterInfo[] dbg = register.GetParameters();
+                string sig = "";
+                for (int d = 0; d < dbg.Length; d++) sig += dbg[d].ParameterType.Name + " ";
+                Debug.Log("[LaneShifter] Calling UUI: " + register.Name + "(" + sig.Trim() + ")");
+
                 object result = register.Invoke(null, args);
                 Debug.Log("[LaneShifter] UUI registered: " + result);
             }
@@ -175,26 +181,32 @@ namespace LaneShifter
         }
 
         // ---- Icon ----
+        // Loads icon.png from the same folder as the DLL (standard CS1 pattern).
+        // Copy icon.png next to LaneShifter.dll in your Mods folder.
         private static Texture2D LoadIcon()
         {
             try
             {
-                System.IO.Stream s = Assembly.GetExecutingAssembly()
-                    .GetManifestResourceStream("LaneShifter.icon.png");
-                if (!object.ReferenceEquals(s, null))
-                {
-                    using (s)
-                    {
-                        byte[] buf = new byte[s.Length];
-                        s.Read(buf, 0, buf.Length);
-                        Texture2D tex = new Texture2D(40, 40, TextureFormat.ARGB32, false);
-                        tex.LoadImage(buf);
-                        return tex;
-                    }
-                }
-            }
-            catch { }
+                string modFolder = System.IO.Path.GetDirectoryName(
+                    Assembly.GetExecutingAssembly().Location);
+                string iconPath  = System.IO.Path.Combine(modFolder, "icon.png");
 
+                if (System.IO.File.Exists(iconPath))
+                {
+                    byte[]    buf = System.IO.File.ReadAllBytes(iconPath);
+                    Texture2D tex = new Texture2D(40, 40, TextureFormat.ARGB32, false);
+                    tex.LoadImage(buf);
+                    Debug.Log("[LaneShifter] Icon loaded from: " + iconPath);
+                    return tex;
+                }
+                Debug.LogWarning("[LaneShifter] icon.png not found at: " + iconPath);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[LaneShifter] Icon load error: " + ex.Message);
+            }
+
+            // Fallback: solid green square
             Texture2D fallback = new Texture2D(32, 32, TextureFormat.RGBA32, false);
             Color32   fill     = new Color32(80, 200, 120, 255);
             for (int y = 0; y < 32; y++)
