@@ -1,8 +1,9 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Globalization;
 using System.Text;
+using CitiesHarmony.API;
 using ColossalFramework;
 using ColossalFramework.Math;
 using ColossalFramework.UI;
@@ -11,384 +12,855 @@ using UnityEngine;
 
 namespace LaneShift
 {
-    // ------------------------------------------------------------------ mod entry point
+    // =====================================================================
+    // Mod entry point
+    // =====================================================================
     public class LaneShiftUserMod : IUserMod
     {
         public string Name { get { return "Lane Shift"; } }
+
         public string Description
         {
-            get { return "Shift individual lanes of a road segment sideways. Ctrl+L or the on-screen button."; }
+            get { return "Shift individual pedestrian, vehicle, transit, and other lanes on placed network segments."; }
+        }
+
+        // Deliberately no Harmony types are referenced from IUserMod itself.
+        // The Harmony API is handled by LaneShiftPatcher, as recommended by
+        // CitiesHarmony.
+        public void OnEnabled()
+        {
+            LaneShiftPatcher.Enable();
+        }
+
+        public void OnDisabled()
+        {
+            LaneShiftPatcher.Disable();
         }
     }
 
-    // ------------------------------------------------------------------ data
+    // =====================================================================
+    // Harmony bootstrap / patch
+    // =====================================================================
+    public static class LaneShiftPatcher
+    {
+        private const string HarmonyId = "JonathanMonaghan.LaneShift";
+        private static bool enabled;
+        private static bool patched;
+
+        public static void Enable()
+        {
+            enabled = true;
+
+            // CitiesHarmony can auto-install/prepare itself and then invokes
+            // our patcher when Harmony is ready.
+            HarmonyHelper.DoOnHarmonyReady(delegate
+            {
+                if (enabled)
+                {
+                    PatchAll();
+                }
+            });
+        }
+
+        public static void Disable()
+        {
+            enabled = false;
+
+            if (HarmonyHelper.IsHarmonyInstalled)
+            {
+                UnpatchAll();
+            }
+        }
+
+        private static void PatchAll()
+        {
+            if (patched) return;
+
+            HarmonyLib.Harmony harmony = new HarmonyLib.Harmony(HarmonyId);
+
+            MethodInfo original = typeof(NetSegment).GetMethod(
+                "UpdateLanes",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                null,
+                new Type[] { typeof(ushort), typeof(bool) },
+                null);
+
+            MethodInfo postfix = typeof(LaneShiftPatcher).GetMethod(
+                "UpdateLanesPostfix",
+                BindingFlags.Static | BindingFlags.NonPublic);
+
+            if (original == null || postfix == null)
+            {
+                Debug.LogError("[LaneShift] Could not find NetSegment.UpdateLanes; lane shifting is disabled.");
+                return;
+            }
+
+            harmony.Patch(
+                original,
+                postfix: new HarmonyLib.HarmonyMethod(postfix));
+
+            patched = true;
+            Debug.Log("[LaneShift] Harmony patch installed.");
+        }
+
+        private static void UpdateLanesPostfix(ushort segmentID)
+        {
+            try
+            {
+                LaneShiftData.Apply(segmentID);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogException(ex);
+            }
+        }
+
+        private static void UnpatchAll()
+        {
+            if (!patched) return;
+
+            HarmonyLib.Harmony harmony = new HarmonyLib.Harmony(HarmonyId);
+            harmony.UnpatchAll(HarmonyId);
+            patched = false;
+            Debug.Log("[LaneShift] Harmony patch removed.");
+        }
+    }
+
+    // =====================================================================
+    // Saved per-segment data
+    // =====================================================================
     public class SegmentRecord
     {
         public ushort Start;
         public ushort End;
         public string InfoName;
-        public float[] Shift;          // one value per lane index of the segment's NetInfo
-        public Bezier3[] Applied;      // last bezier we produced per lane (to detect game resets)
-        public bool[] HasApplied;
-        public bool NeedsReset;        // recompute the lanes from scratch, then re-apply shifts
+        public float[] Shift;
+
+        // UI runs on Unity's main thread while UpdateLanes runs from game
+        // code/simulation. This flag is protected by LaneShiftData.Sync.
+        public bool UpdateQueued;
 
         public SegmentRecord(ushort start, ushort end, string infoName, int laneCount)
         {
             Start = start;
             End = end;
-            InfoName = infoName;
-            Shift = new float[laneCount];
-            Applied = new Bezier3[laneCount];
-            HasApplied = new bool[laneCount];
-            NeedsReset = true;
+            InfoName = infoName ?? string.Empty;
+            Shift = new float[Mathf.Max(0, laneCount)];
+            UpdateQueued = false;
         }
 
         public bool AllZero()
         {
             if (Shift == null) return true;
+
             for (int i = 0; i < Shift.Length; i++)
             {
-                if (Mathf.Abs(Shift[i]) >= 0.001f) return false;
+                if (Mathf.Abs(Shift[i]) >= 0.001f)
+                {
+                    return false;
+                }
             }
+
             return true;
         }
     }
 
     public static class LaneShiftData
     {
-        private static readonly ConcurrentDictionary<ushort, SegmentRecord> records = new ConcurrentDictionary<ushort, SegmentRecord>();
+        public static readonly object Sync = new object();
+
+        private static readonly Dictionary<ushort, SegmentRecord> records =
+            new Dictionary<ushort, SegmentRecord>();
 
         public static void Clear()
         {
-            records.Clear();
+            lock (Sync)
+            {
+                records.Clear();
+            }
         }
 
-        static bool IsValid(ushort id, SegmentRecord r)
+        // Called by the UI after it has read the current segment information.
+        public static void EnsureSegment(
+            ushort segmentId,
+            ushort startNode,
+            ushort endNode,
+            string infoName,
+            int laneCount)
         {
-            if (r == null) return false;
-            NetManager nm = Singleton<NetManager>.instance;
-            if (id == 0 || id >= nm.m_segments.m_buffer.Length) return false;
-            NetSegment seg = nm.m_segments.m_buffer[id];
-            if ((seg.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None) return false;
-            NetInfo info = seg.Info;
-            if (info == null) return false;
-            return seg.m_startNode == r.Start
-                && seg.m_endNode == r.End
-                && info.name == r.InfoName
-                && info.m_lanes.Length == r.Shift.Length;
+            lock (Sync)
+            {
+                SegmentRecord record;
+                if (!records.TryGetValue(segmentId, out record) ||
+                    record == null ||
+                    record.Start != startNode ||
+                    record.End != endNode ||
+                    !string.Equals(record.InfoName, infoName, StringComparison.Ordinal) ||
+                    record.Shift == null ||
+                    record.Shift.Length != laneCount)
+                {
+                    records[segmentId] = new SegmentRecord(startNode, endNode, infoName, laneCount);
+                }
+            }
         }
 
         public static float GetShift(ushort segmentId, int laneIndex)
         {
-            SegmentRecord r;
-            if (records.TryGetValue(segmentId, out r) && IsValid(segmentId, r)
-                && laneIndex >= 0 && laneIndex < r.Shift.Length)
+            lock (Sync)
             {
-                return r.Shift[laneIndex];
+                SegmentRecord record;
+                if (records.TryGetValue(segmentId, out record) &&
+                    record != null &&
+                    record.Shift != null &&
+                    laneIndex >= 0 &&
+                    laneIndex < record.Shift.Length)
+                {
+                    return record.Shift[laneIndex];
+                }
+
+                return 0f;
             }
-            return 0f;
         }
 
+        // UI-safe: this method does NOT touch NetManager. It only updates our
+        // data and queues a simulation action that asks CS1 to rebuild the
+        // segment. The Harmony postfix then applies the offsets.
         public static void SetShift(ushort segmentId, int laneIndex, float value)
         {
-            NetManager nm = Singleton<NetManager>.instance;
-            NetSegment seg = nm.m_segments.m_buffer[segmentId];
-            NetInfo info = seg.Info;
-            if (info == null || laneIndex < 0 || laneIndex >= info.m_lanes.Length) return;
+            bool queueUpdate = false;
 
-            SegmentRecord r = records.GetOrAdd(segmentId, id => 
-                new SegmentRecord(seg.m_startNode, seg.m_endNode, info.name, info.m_lanes.Length));
-
-            if (!IsValid(segmentId, r))
+            lock (Sync)
             {
-                r = new SegmentRecord(seg.m_startNode, seg.m_endNode, info.name, info.m_lanes.Length);
-                records[segmentId] = r;
+                SegmentRecord record;
+                if (!records.TryGetValue(segmentId, out record) ||
+                    record == null ||
+                    record.Shift == null ||
+                    laneIndex < 0 ||
+                    laneIndex >= record.Shift.Length)
+                {
+                    return;
+                }
+
+                record.Shift[laneIndex] = value;
+
+                if (!record.UpdateQueued)
+                {
+                    record.UpdateQueued = true;
+                    queueUpdate = true;
+                }
             }
 
-            r.Shift[laneIndex] = value;
-            r.NeedsReset = true;
-            QueueTick();
+            if (queueUpdate)
+            {
+                QueueSegmentUpdate(segmentId);
+            }
         }
 
         public static void ResetSegment(ushort segmentId)
         {
-            SegmentRecord r;
-            if (records.TryGetValue(segmentId, out r))
+            bool queueUpdate = false;
+
+            lock (Sync)
             {
-                for (int i = 0; i < r.Shift.Length; i++) r.Shift[i] = 0f;
-                r.NeedsReset = true;
-            }
-            QueueTick();
-        }
-
-        static void QueueTick()
-        {
-            Singleton<SimulationManager>.instance.AddAction(delegate () { Tick(); });
-        }
-
-        public static void Tick()
-        {
-            if (records.IsEmpty) return;
-            NetManager nm = Singleton<NetManager>.instance;
-            List<ushort> remove = null;
-
-            foreach (KeyValuePair<ushort, SegmentRecord> kv in records)
-            {
-                ushort id = kv.Key;
-                SegmentRecord r = kv.Value;
-
-                if (!IsValid(id, r))
+                SegmentRecord record;
+                if (!records.TryGetValue(segmentId, out record) || record == null)
                 {
-                    if (remove == null) remove = new List<ushort>();
-                    remove.Add(id);
+                    return;
+                }
+
+                if (record.Shift != null)
+                {
+                    for (int i = 0; i < record.Shift.Length; i++)
+                    {
+                        record.Shift[i] = 0f;
+                    }
+                }
+
+                if (!record.UpdateQueued)
+                {
+                    record.UpdateQueued = true;
+                    queueUpdate = true;
+                }
+            }
+
+            if (queueUpdate)
+            {
+                QueueSegmentUpdate(segmentId);
+            }
+        }
+
+        private static void QueueSegmentUpdate(ushort segmentId)
+        {
+            try
+            {
+                SimulationManager simulation = Singleton<SimulationManager>.instance;
+                if (simulation == null)
+                {
+                    return;
+                }
+
+                simulation.AddAction(delegate
+                {
+                    RebuildSegment(segmentId);
+                });
+            }
+            catch (Exception ex)
+            {
+                Debug.LogException(ex);
+            }
+        }
+
+        private static void RebuildSegment(ushort segmentId)
+        {
+            NetManager netManager = Singleton<NetManager>.instance;
+
+            lock (Sync)
+            {
+                SegmentRecord record;
+                if (records.TryGetValue(segmentId, out record) && record != null)
+                {
+                    record.UpdateQueued = false;
+                }
+            }
+
+            if (netManager == null || segmentId == 0 || segmentId >= netManager.m_segments.m_buffer.Length)
+            {
+                return;
+            }
+
+            NetSegment segment = netManager.m_segments.m_buffer[segmentId];
+            if ((segment.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None)
+            {
+                Remove(segmentId);
+                return;
+            }
+
+            // The original game rebuilds lane geometry here. Our Harmony
+            // postfix immediately reapplies the stored offsets from fresh
+            // geometry. Call the array element directly because NetSegment
+            // is a struct and UpdateLanes mutates the stored segment.
+            netManager.m_segments.m_buffer[segmentId].UpdateLanes(segmentId, true);
+        }
+
+        private static void Remove(ushort segmentId)
+        {
+            lock (Sync)
+            {
+                records.Remove(segmentId);
+            }
+        }
+
+        private static bool IsValid(
+            ushort segmentId,
+            SegmentRecord record,
+            NetManager netManager,
+            out NetSegment segment,
+            out NetInfo info)
+        {
+            segment = default(NetSegment);
+            info = null;
+
+            if (record == null || netManager == null || segmentId == 0)
+            {
+                return false;
+            }
+
+            if (segmentId >= netManager.m_segments.m_buffer.Length)
+            {
+                return false;
+            }
+
+            segment = netManager.m_segments.m_buffer[segmentId];
+
+            if ((segment.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None)
+            {
+                return false;
+            }
+
+            info = segment.Info;
+            if (info == null || info.m_lanes == null)
+            {
+                return false;
+            }
+
+            return segment.m_startNode == record.Start &&
+                   segment.m_endNode == record.End &&
+                   string.Equals(info.name, record.InfoName, StringComparison.Ordinal) &&
+                   info.m_lanes.Length == record.Shift.Length;
+        }
+
+        // Called from the Harmony postfix, i.e. after stock lane geometry has
+        // been rebuilt. This method is intentionally idempotent relative to a
+        // normal UpdateLanes call: the source geometry is fresh every time.
+        public static void Apply(ushort segmentId)
+        {
+            NetManager netManager = Singleton<NetManager>.instance;
+            SegmentRecord record;
+            float[] shifts;
+            bool removeAfterApply = false;
+
+            lock (Sync)
+            {
+                if (!records.TryGetValue(segmentId, out record) || record == null)
+                {
+                    return;
+                }
+
+                shifts = record.Shift != null ? (float[])record.Shift.Clone() : null;
+            }
+
+            NetSegment segment;
+            NetInfo info;
+            if (!IsValid(segmentId, record, netManager, out segment, out info))
+            {
+                Remove(segmentId);
+                return;
+            }
+
+            if (shifts == null || shifts.Length == 0)
+            {
+                Remove(segmentId);
+                return;
+            }
+
+            if (record == null)
+            {
+                return;
+            }
+
+            uint laneId = segment.m_lanes;
+            bool changed = false;
+
+            for (int laneIndex = 0;
+                 laneIndex < info.m_lanes.Length &&
+                 laneIndex < shifts.Length &&
+                 laneId != 0;
+                 laneIndex++)
+            {
+                float shift = shifts[laneIndex];
+
+                if (Mathf.Abs(shift) < 0.001f)
+                {
+                    laneId = netManager.m_lanes.m_buffer[laneId].m_nextLane;
                     continue;
                 }
 
-                if (r.NeedsReset)
-                {
-                    nm.m_segments.m_buffer[id].UpdateLanes(id, true);
-                    r.NeedsReset = false;
-                    for (int i = 0; i < r.HasApplied.Length; i++) r.HasApplied[i] = false;
-                }
+                NetLane lane = netManager.m_lanes.m_buffer[laneId];
+                lane.m_bezier = ShiftBezier(lane.m_bezier, shift);
+                lane.UpdateLength();
+                netManager.m_lanes.m_buffer[laneId] = lane;
 
-                ApplySegment(nm, id, r);
-
-                if (r.AllZero())
-                {
-                    if (remove == null) remove = new List<ushort>();
-                    remove.Add(id);
-                }
+                changed = true;
+                laneId = lane.m_nextLane;
             }
 
-            if (remove != null)
+            // Do not immediately delete a zero-valued record during a call
+            // from ResetSegment until the stock UpdateLanes has completed;
+            // this postfix is that completion point.
+            lock (Sync)
             {
-                for (int i = 0; i < remove.Count; i++)
+                SegmentRecord latest;
+                if (records.TryGetValue(segmentId, out latest) && latest != null)
                 {
-                    SegmentRecord trash;
-                    records.TryRemove(remove[i], out trash);
+                    removeAfterApply = latest.AllZero();
                 }
-            }
-        }
-
-        static void ApplySegment(NetManager nm, ushort id, SegmentRecord r)
-        {
-            NetInfo info = nm.m_segments.m_buffer[id].Info;
-            uint laneId = nm.m_segments.m_buffer[id].m_lanes;
-            bool changed = false;
-
-            for (int i = 0; i < info.m_lanes.Length && laneId != 0; i++)
-            {
-                float s = r.Shift[i];
-                if (Mathf.Abs(s) < 0.001f)
-                {
-                    r.HasApplied[i] = false;
-                }
-                else
-                {
-                    Bezier3 cur = nm.m_lanes.m_buffer[laneId].m_bezier;
-                    if (!(r.HasApplied[i] && Same(r.Applied[i], cur)))
-                    {
-                        Bezier3 shifted = ShiftBezier(cur, s);
-                        nm.m_lanes.m_buffer[laneId].m_bezier = shifted;
-                        nm.m_lanes.m_buffer[laneId].UpdateLength();
-                        r.Applied[i] = shifted;
-                        r.HasApplied[i] = true;
-                        changed = true;
-                    }
-                }
-                laneId = nm.m_lanes.m_buffer[laneId].m_nextLane;
             }
 
             if (changed)
             {
+                // Update the aggregate segment length used by some stock
+                // traffic calculations after we changed the lane curves.
                 float total = 0f;
                 int count = 0;
-                uint l = nm.m_segments.m_buffer[id].m_lanes;
-                for (int i = 0; i < info.m_lanes.Length && l != 0; i++)
+                uint currentLane = segment.m_lanes;
+
+                for (int laneIndex = 0;
+                     laneIndex < info.m_lanes.Length && currentLane != 0;
+                     laneIndex++)
                 {
-                    total += nm.m_lanes.m_buffer[l].m_length;
+                    total += netManager.m_lanes.m_buffer[currentLane].m_length;
                     count++;
-                    l = nm.m_lanes.m_buffer[l].m_nextLane;
+                    currentLane = netManager.m_lanes.m_buffer[currentLane].m_nextLane;
                 }
-                if (count > 0) nm.m_segments.m_buffer[id].m_averageLength = total / count;
+
+                if (count > 0)
+                {
+                    segment.m_averageLength = total / count;
+                    netManager.m_segments.m_buffer[segmentId] = segment;
+                }
+            }
+
+            if (removeAfterApply)
+            {
+                Remove(segmentId);
             }
         }
 
-        static bool Same(Bezier3 a, Bezier3 b)
+        public static void RebuildAllSavedSegments()
         {
-            return a.a == b.a && a.b == b.b && a.c == b.c && a.d == b.d;
+            try
+            {
+                SimulationManager simulation = Singleton<SimulationManager>.instance;
+                if (simulation == null) return;
+
+                simulation.AddAction(delegate
+                {
+                    List<ushort> ids = new List<ushort>();
+
+                    lock (Sync)
+                    {
+                        foreach (KeyValuePair<ushort, SegmentRecord> pair in records)
+                        {
+                            if (pair.Value != null && !pair.Value.AllZero())
+                            {
+                                ids.Add(pair.Key);
+                            }
+                        }
+                    }
+
+                    for (int i = 0; i < ids.Count; i++)
+                    {
+                        ushort segmentId = ids[i];
+                        NetManager netManager = Singleton<NetManager>.instance;
+                        if (netManager == null || segmentId == 0 || segmentId >= netManager.m_segments.m_buffer.Length)
+                        {
+                            continue;
+                        }
+
+                        NetSegment segment = netManager.m_segments.m_buffer[segmentId];
+                        if ((segment.m_flags & NetSegment.Flags.Created) != NetSegment.Flags.None)
+                        {
+                            netManager.m_segments.m_buffer[segmentId].UpdateLanes(segmentId, true);
+                        }
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                Debug.LogException(ex);
+            }
         }
 
-        static Bezier3 ShiftBezier(Bezier3 bz, float shift)
+        private static Bezier3 ShiftBezier(Bezier3 bezier, float shift)
         {
-            float len0 = (bz.d - bz.a).magnitude;
-            Vector3 dira = bz.b - bz.a;
-            bz.a = Offset(bz.a, dira, shift);
+            // CS1 stores each lane as a cubic Bezier. We offset the two
+            // control-point pairs using the horizontal tangent at each end.
+            // This preserves the general curvature much better than simply
+            // translating the entire curve by one world-space vector.
+            Vector3 startDirection = bezier.b - bezier.a;
+            Vector3 endDirection = bezier.d - bezier.c;
 
-            Vector3 dird = bz.c - bz.d;
-            bz.d = Offset(bz.d, -dird, shift);
+            Vector3 startRight = RightVector(startDirection);
+            Vector3 endRight = RightVector(endDirection);
 
-            float len = (bz.d - bz.a).magnitude;
-            float ratio = len0 > 0.001f ? len / len0 : 1f;
-            bz.b = bz.a + dira * ratio;
-            bz.c = bz.d + dird * ratio;
-            return bz;
+            bezier.a += startRight * shift;
+            bezier.b += startRight * shift;
+            bezier.c += endRight * shift;
+            bezier.d += endRight * shift;
+
+            return bezier;
         }
 
-        static Vector3 Offset(Vector3 pos, Vector3 dir, float shift)
+        private static Vector3 RightVector(Vector3 direction)
         {
-            Vector3 right = new Vector3(dir.z, 0f, -dir.x);
-            if (right.sqrMagnitude < 0.000001f) return pos;
+            Vector3 horizontal = new Vector3(direction.x, 0f, direction.z);
+
+            if (horizontal.sqrMagnitude < 0.000001f)
+            {
+                return Vector3.zero;
+            }
+
+            horizontal.Normalize();
+            Vector3 right = new Vector3(horizontal.z, 0f, -horizontal.x);
             right.Normalize();
-            return pos + right * shift;
+            return right;
         }
 
+        // --------------------------------------------------------------- save
         public static byte[] Serialize()
         {
-            StringBuilder sb = new StringBuilder();
-            sb.Append("v1\n");
-            int written = 0;
-            foreach (KeyValuePair<ushort, SegmentRecord> kv in records)
+            StringBuilder builder = new StringBuilder();
+            builder.Append("v1\n");
+
+            lock (Sync)
             {
-                SegmentRecord r = kv.Value;
-                if (r == null || r.AllZero()) continue;
-                sb.Append(kv.Key.ToString(CultureInfo.InvariantCulture)).Append('\t');
-                sb.Append(r.Start.ToString(CultureInfo.InvariantCulture)).Append('\t');
-                sb.Append(r.End.ToString(CultureInfo.InvariantCulture)).Append('\t');
-                sb.Append(r.InfoName).Append('\t');
-                for (int i = 0; i < r.Shift.Length; i++)
+                foreach (KeyValuePair<ushort, SegmentRecord> pair in records)
                 {
-                    if (i > 0) sb.Append(';');
-                    sb.Append(r.Shift[i].ToString("R", CultureInfo.InvariantCulture));
+                    SegmentRecord record = pair.Value;
+                    if (record == null || record.AllZero())
+                    {
+                        continue;
+                    }
+
+                    builder.Append(pair.Key.ToString(CultureInfo.InvariantCulture)).Append('\t');
+                    builder.Append(record.Start.ToString(CultureInfo.InvariantCulture)).Append('\t');
+                    builder.Append(record.End.ToString(CultureInfo.InvariantCulture)).Append('\t');
+                    builder.Append(record.InfoName ?? string.Empty).Append('\t');
+
+                    for (int i = 0; i < record.Shift.Length; i++)
+                    {
+                        if (i > 0) builder.Append(';');
+                        builder.Append(record.Shift[i].ToString("R", CultureInfo.InvariantCulture));
+                    }
+
+                    builder.Append('\n');
                 }
-                sb.Append('\n');
-                written++;
             }
-            if (written == 0) return null;
-            return Encoding.UTF8.GetBytes(sb.ToString());
+
+            string text = builder.ToString();
+            if (text == "v1\n")
+            {
+                return null;
+            }
+
+            return Encoding.UTF8.GetBytes(text);
         }
 
         public static void Deserialize(byte[] data)
         {
-            records.Clear();
-            if (data == null) return;
-            string text = Encoding.UTF8.GetString(data);
-            string[] lines = text.Split('\n');
-            for (int n = 1; n < lines.Length; n++)
+            lock (Sync)
             {
-                string line = lines[n];
-                if (line.Length == 0) continue;
-                try
+                records.Clear();
+            }
+
+            if (data == null || data.Length == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                string text = Encoding.UTF8.GetString(data);
+                string[] lines = text.Split('\n');
+
+                for (int lineIndex = 1; lineIndex < lines.Length; lineIndex++)
                 {
-                    string[] p = line.Split('\t');
-                    ushort id = ushort.Parse(p[0], CultureInfo.InvariantCulture);
-                    ushort start = ushort.Parse(p[1], CultureInfo.InvariantCulture);
-                    ushort end = ushort.Parse(p[2], CultureInfo.InvariantCulture);
-                    string[] vals = p[4].Split(';');
-                    SegmentRecord r = new SegmentRecord(start, end, p[3], vals.Length);
-                    for (int i = 0; i < vals.Length; i++)
+                    string line = lines[lineIndex].TrimEnd('\r');
+                    if (line.Length == 0)
                     {
-                        r.Shift[i] = float.Parse(vals[i], NumberStyles.Float, CultureInfo.InvariantCulture);
+                        continue;
                     }
-                    r.NeedsReset = true;
-                    records[id] = r;
+
+                    try
+                    {
+                        string[] parts = line.Split('\t');
+                        if (parts.Length < 5)
+                        {
+                            continue;
+                        }
+
+                        ushort segmentId = ushort.Parse(parts[0], CultureInfo.InvariantCulture);
+                        ushort start = ushort.Parse(parts[1], CultureInfo.InvariantCulture);
+                        ushort end = ushort.Parse(parts[2], CultureInfo.InvariantCulture);
+                        string infoName = parts[3];
+                        string[] values = parts[4].Split(';');
+
+                        SegmentRecord record = new SegmentRecord(start, end, infoName, values.Length);
+
+                        for (int i = 0; i < values.Length; i++)
+                        {
+                            record.Shift[i] = float.Parse(
+                                values[i],
+                                NumberStyles.Float,
+                                CultureInfo.InvariantCulture);
+                        }
+
+                        lock (Sync)
+                        {
+                            records[segmentId] = record;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning("[LaneShift] Skipping save line: " + ex.Message);
+                    }
                 }
-                catch (Exception ex)
+            }
+            catch (Exception ex)
+            {
+                Debug.LogException(ex);
+            }
+        }
+
+        public static void PruneInvalidRecords()
+        {
+            NetManager netManager = Singleton<NetManager>.instance;
+            if (netManager == null)
+            {
+                return;
+            }
+
+            List<ushort> removeIds = new List<ushort>();
+
+            lock (Sync)
+            {
+                foreach (KeyValuePair<ushort, SegmentRecord> pair in records)
                 {
-                    Debug.LogWarning("[LaneShift] skipped bad save line: " + ex.Message);
+                    NetSegment dummySegment;
+                    NetInfo dummyInfo;
+
+                    if (!IsValid(pair.Key, pair.Value, netManager, out dummySegment, out dummyInfo))
+                    {
+                        removeIds.Add(pair.Key);
+                    }
+                }
+
+                for (int i = 0; i < removeIds.Count; i++)
+                {
+                    records.Remove(removeIds[i]);
                 }
             }
         }
     }
 
-    // ------------------------------------------------------------------ UI helpers
+    // =====================================================================
+    // UI helpers
+    // =====================================================================
     public static class LaneShiftUI
     {
-        public static UIButton MakeButton(UIComponent parent, string text, float w, float h, Vector3 pos)
+        public static UIButton MakeButton(
+            UIComponent parent,
+            string text,
+            float width,
+            float height,
+            Vector3 position)
         {
-            UIButton b = (UIButton)parent.AddUIComponent(typeof(UIButton));
-            b.text = text;
-            b.width = w;
-            b.height = h;
-            b.relativePosition = pos;
-            b.normalBgSprite = "ButtonMenu";
-            b.hoveredBgSprite = "ButtonMenuHovered";
-            b.pressedBgSprite = "ButtonMenuPressed";
-            b.disabledBgSprite = "ButtonMenuDisabled";
-            b.textColor = new Color32(255, 255, 255, 255);
-            b.textScale = 0.9f;
-            b.textHorizontalAlignment = UIHorizontalAlignment.Center;
-            b.textVerticalAlignment = UIVerticalAlignment.Middle;
-            return b;
+            UIButton button = parent.AddUIComponent<UIButton>();
+            button.text = text;
+            button.width = width;
+            button.height = height;
+            button.relativePosition = position;
+            button.normalBgSprite = "ButtonMenu";
+            button.hoveredBgSprite = "ButtonMenuHovered";
+            button.pressedBgSprite = "ButtonMenuPressed";
+            button.disabledBgSprite = "ButtonMenuDisabled";
+            button.textColor = new Color32(255, 255, 255, 255);
+            button.textScale = 0.9f;
+            button.textHorizontalAlignment = UIHorizontalAlignment.Center;
+            button.textVerticalAlignment = UIVerticalAlignment.Middle;
+            return button;
         }
 
-        public static UILabel MakeLabel(UIComponent parent, string text, float w, Vector3 pos)
+        public static UILabel MakeLabel(
+            UIComponent parent,
+            string text,
+            float width,
+            Vector3 position,
+            float height = 22f)
         {
-            UILabel l = (UILabel)parent.AddUIComponent(typeof(UILabel));
-            l.autoSize = false;
-            l.width = w;
-            l.height = 22f;
-            l.text = text;
-            l.textScale = 0.85f;
-            l.relativePosition = pos;
-            l.isInteractive = false;
-            return l;
+            UILabel label = parent.AddUIComponent<UILabel>();
+            label.autoSize = false;
+            label.width = width;
+            label.height = height;
+            label.text = text;
+            label.textScale = 0.85f;
+            label.relativePosition = position;
+            label.isInteractive = false;
+            return label;
         }
 
-        public static UITextField MakeField(UIComponent parent, float w, float h, Vector3 pos)
+        public static UITextField MakeField(
+            UIComponent parent,
+            float width,
+            float height,
+            Vector3 position)
         {
-            UITextField f = (UITextField)parent.AddUIComponent(typeof(UITextField));
-            f.width = w;
-            f.height = h;
-            f.relativePosition = pos;
-            f.normalBgSprite = "TextFieldPanel";
-            f.hoveredBgSprite = "TextFieldPanelHovered";
-            f.focusedBgSprite = "TextFieldPanel";
-            f.selectionSprite = "EmptySprite";
-            f.color = new Color32(70, 80, 95, 255);
-            f.textColor = new Color32(255, 255, 255, 255);
-            f.textScale = 0.9f;
-            f.padding = new RectOffset(6, 6, 6, 4);
-            f.builtinKeyNavigation = true;
-            f.isInteractive = true;
-            f.readOnly = false;
-            f.selectOnFocus = true;
-            f.submitOnFocusLost = true;
-            return f;
+            UITextField field = parent.AddUIComponent<UITextField>();
+            field.width = width;
+            field.height = height;
+            field.relativePosition = position;
+            field.normalBgSprite = "TextFieldPanel";
+            field.hoveredBgSprite = "TextFieldPanelHovered";
+            field.focusedBgSprite = "TextFieldPanel";
+            field.selectionSprite = "EmptySprite";
+            field.color = new Color32(70, 80, 95, 255);
+            field.textColor = new Color32(255, 255, 255, 255);
+            field.textScale = 0.9f;
+            field.padding = new RectOffset(6, 6, 5, 4);
+            field.builtinKeyNavigation = true;
+            field.isInteractive = true;
+            field.readOnly = false;
+            field.selectOnFocus = true;
+            field.submitOnFocusLost = true;
+            return field;
         }
     }
 
+    // =====================================================================
+    // Lane Shift window
+    // =====================================================================
     public static class LaneShiftPanel
     {
-        const float Width = 380f;
-        const float Step = 0.1f;
-        static UIPanel panel;
-        static UILabel titleLabel;
-        static List<UIComponent> rows = new List<UIComponent>();
-        static ushort currentSegment;
+        private const float Width = 455f;
+        private const float HeaderHeight = 62f;
+        private const float RowHeight = 32f;
+        private const float FooterHeight = 40f;
+        private const float Step = 0.1f;
+        private const float MaxShift = 20f;
+
+        private static UIPanel panel;
+        private static UILabel titleLabel;
+        private static UILabel helpLabel;
+        private static readonly List<UIComponent> rows = new List<UIComponent>();
+        private static ushort currentSegment;
 
         public static void Create()
         {
+            if (panel != null)
+            {
+                return;
+            }
+
             UIView view = UIView.GetAView();
-            panel = (UIPanel)view.AddUIComponent(typeof(UIPanel));
+            if (view == null)
+            {
+                return;
+            }
+
+            panel = view.AddUIComponent<UIPanel>();
             panel.name = "LaneShiftPanel";
             panel.backgroundSprite = "MenuPanel2";
             panel.width = Width;
-            panel.height = 120f;
-            Vector2 res = view.GetScreenResolution();
-            panel.relativePosition = new Vector3(res.x - Width - 20f, 120f);
+            panel.height = 150f;
+
+            Vector2 resolution = view.GetScreenResolution();
+            panel.relativePosition = new Vector3(
+                Mathf.Max(10f, resolution.x - Width - 20f),
+                110f);
+
             panel.isVisible = false;
 
-            UIDragHandle drag = (UIDragHandle)panel.AddUIComponent(typeof(UIDragHandle));
+            UIDragHandle drag = panel.AddUIComponent<UIDragHandle>();
             drag.width = Width;
-            drag.height = 36f;
+            drag.height = 34f;
             drag.relativePosition = Vector3.zero;
             drag.target = panel;
 
-            titleLabel = LaneShiftUI.MakeLabel(panel, "Lane Shift", Width - 60f, new Vector3(14f, 10f));
+            titleLabel = LaneShiftUI.MakeLabel(
+                panel,
+                "Lane Shift",
+                Width - 70f,
+                new Vector3(14f, 7f));
+            titleLabel.textScale = 1.0f;
 
-            UIButton close = LaneShiftUI.MakeButton(panel, "X", 28f, 24f, new Vector3(Width - 38f, 6f));
-            close.eventClick += delegate (UIComponent c, UIMouseEventParameter p) { LaneShiftTool.Deactivate(); };
+            helpLabel = LaneShiftUI.MakeLabel(
+                panel,
+                "Meters • positive = right from start node to end node",
+                Width - 30f,
+                new Vector3(14f, 31f));
+            helpLabel.textScale = 0.72f;
+
+            UIButton close = LaneShiftUI.MakeButton(
+                panel,
+                "X",
+                28f,
+                24f,
+                new Vector3(Width - 38f, 5f));
+
+            close.eventClick += delegate(UIComponent component, UIMouseEventParameter eventParam)
+            {
+                LaneShiftTool.Deactivate();
+            };
         }
 
         public static void Destroy()
@@ -398,138 +870,252 @@ namespace LaneShift
                 UnityEngine.Object.Destroy(panel.gameObject);
                 panel = null;
             }
+
+            titleLabel = null;
+            helpLabel = null;
             rows.Clear();
+            currentSegment = 0;
         }
 
         public static void Hide()
         {
-            if (panel != null) panel.isVisible = false;
+            if (panel != null)
+            {
+                panel.isVisible = false;
+            }
         }
 
-        static void ClearRows()
+        private static void ClearRows()
         {
             for (int i = 0; i < rows.Count; i++)
             {
-                if (rows[i] != null)
+                UIComponent row = rows[i];
+                if (row != null)
                 {
-                    panel.RemoveUIComponent(rows[i]);
-                    UnityEngine.Object.Destroy(rows[i].gameObject);
+                    panel.RemoveUIComponent(row);
+                    UnityEngine.Object.Destroy(row.gameObject);
                 }
             }
+
             rows.Clear();
         }
 
-        static string Format(float v)
+        private static string Format(float value)
         {
-            return v.ToString("0.##", CultureInfo.InvariantCulture);
+            return value.ToString("0.##", CultureInfo.InvariantCulture);
         }
 
-        static float Parse(string s, float fallback)
+        private static float Parse(string text, float fallback)
         {
-            float v;
-            s = s.Trim().Replace(',', '.');
-            if (float.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out v)) return v;
+            if (string.IsNullOrEmpty(text))
+            {
+                return fallback;
+            }
+
+            float value;
+            text = text.Trim().Replace(',', '.');
+
+            if (float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+            {
+                return value;
+            }
+
             return fallback;
         }
 
-        static void SetLane(int laneIndex, UITextField field, float value)
+        private static void SetLane(int laneIndex, UITextField field, float value)
         {
-            value = Mathf.Clamp(value, -20f, 20f);
+            value = Mathf.Clamp(value, -MaxShift, MaxShift);
             value = (float)Math.Round(value, 2);
             LaneShiftData.SetShift(currentSegment, laneIndex, value);
             field.text = Format(value);
         }
 
+        private static string LaneTypeName(NetInfo.Lane lane)
+        {
+            if ((lane.m_laneType & NetInfo.LaneType.Vehicle) != NetInfo.LaneType.None)
+                return "Vehicle";
+            if ((lane.m_laneType & NetInfo.LaneType.TransportVehicle) != NetInfo.LaneType.None)
+                return "Transit";
+            if ((lane.m_laneType & NetInfo.LaneType.Pedestrian) != NetInfo.LaneType.None)
+                return "Pedestrian";
+            return lane.m_laneType.ToString();
+        }
+
         public static void Show(ushort segmentId)
         {
-            if (panel == null) return;
-            ClearRows();
-            currentSegment = segmentId;
-
-            NetInfo info = Singleton<NetManager>.instance.m_segments.m_buffer[segmentId].Info;
-            if (info == null)
+            if (panel == null)
             {
-                panel.isVisible = false;
                 return;
             }
 
-            string name = info.name;
-            if (name.Length > 28) name = name.Substring(0, 28) + "...";
-            titleLabel.text = "Segment " + segmentId + " - " + name;
-
-            float y = 44f;
-            for (int i = 0; i < info.m_lanes.Length; i++)
+            NetManager netManager = Singleton<NetManager>.instance;
+            if (netManager == null || segmentId == 0 || segmentId >= netManager.m_segments.m_buffer.Length)
             {
-                NetInfo.Lane lane = info.m_lanes[i];
-                int laneIndex = i;
+                return;
+            }
 
-                string caption = "#" + i + " " + lane.m_laneType.ToString() + " ("
-                    + lane.m_position.ToString("0.0", CultureInfo.InvariantCulture) + ")";
-                rows.Add(LaneShiftUI.MakeLabel(panel, caption, 170f, new Vector3(14f, y + 4f)));
+            NetSegment segment = netManager.m_segments.m_buffer[segmentId];
+            if ((segment.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || segment.Info == null)
+            {
+                return;
+            }
 
-                UIButton minus = LaneShiftUI.MakeButton(panel, "-", 26f, 26f, new Vector3(190f, y));
-                UITextField field = LaneShiftUI.MakeField(panel, 70f, 26f, new Vector3(220f, y));
-                UIButton plus = LaneShiftUI.MakeButton(panel, "+", 26f, 26f, new Vector3(296f, y));
+            NetInfo info = segment.Info;
+
+            LaneShiftData.EnsureSegment(
+                segmentId,
+                segment.m_startNode,
+                segment.m_endNode,
+                info.name,
+                info.m_lanes.Length);
+
+            ClearRows();
+            currentSegment = segmentId;
+
+            string name = info.name ?? "Network";
+            if (name.Length > 34)
+            {
+                name = name.Substring(0, 34) + "...";
+            }
+
+            titleLabel.text = "Segment " + segmentId + " — " + name;
+
+            float y = HeaderHeight;
+
+            for (int laneIndex = 0; laneIndex < info.m_lanes.Length; laneIndex++)
+            {
+                NetInfo.Lane lane = info.m_lanes[laneIndex];
+                int capturedLaneIndex = laneIndex;
+
+                string caption =
+                    "#" + laneIndex + "  " +
+                    LaneTypeName(lane) +
+                    "  pos " + lane.m_position.ToString("0.0", CultureInfo.InvariantCulture);
+
+                UILabel label = LaneShiftUI.MakeLabel(
+                    panel,
+                    caption,
+                    250f,
+                    new Vector3(14f, y + 4f));
+
+                UIButton minus = LaneShiftUI.MakeButton(
+                    panel,
+                    "−",
+                    28f,
+                    26f,
+                    new Vector3(270f, y));
+
+                UITextField field = LaneShiftUI.MakeField(
+                    panel,
+                    72f,
+                    26f,
+                    new Vector3(303f, y));
+
+                UIButton plus = LaneShiftUI.MakeButton(
+                    panel,
+                    "+",
+                    28f,
+                    26f,
+                    new Vector3(380f, y));
+
+                rows.Add(label);
                 rows.Add(minus);
                 rows.Add(field);
                 rows.Add(plus);
 
-                field.text = Format(LaneShiftData.GetShift(segmentId, laneIndex));
+                field.text = Format(LaneShiftData.GetShift(segmentId, capturedLaneIndex));
 
-                minus.eventClick += delegate (UIComponent c, UIMouseEventParameter p)
+                minus.eventClick += delegate(UIComponent component, UIMouseEventParameter eventParam)
                 {
-                    float cur = Parse(field.text, LaneShiftData.GetShift(currentSegment, laneIndex));
-                    SetLane(laneIndex, field, cur - Step);
-                };
-                plus.eventClick += delegate (UIComponent c, UIMouseEventParameter p)
-                {
-                    float cur = Parse(field.text, LaneShiftData.GetShift(currentSegment, laneIndex));
-                    SetLane(laneIndex, field, cur + Step);
-                };
-                field.eventTextSubmitted += delegate (UIComponent c, string value)
-                {
-                    SetLane(laneIndex, field, Parse(value, LaneShiftData.GetShift(currentSegment, laneIndex)));
+                    float current = Parse(
+                        field.text,
+                        LaneShiftData.GetShift(currentSegment, capturedLaneIndex));
+                    SetLane(capturedLaneIndex, field, current - Step);
                 };
 
-                y += 32f;
+                plus.eventClick += delegate(UIComponent component, UIMouseEventParameter eventParam)
+                {
+                    float current = Parse(
+                        field.text,
+                        LaneShiftData.GetShift(currentSegment, capturedLaneIndex));
+                    SetLane(capturedLaneIndex, field, current + Step);
+                };
+
+                field.eventTextSubmitted += delegate(UIComponent component, string value)
+                {
+                    SetLane(
+                        capturedLaneIndex,
+                        field,
+                        Parse(value, LaneShiftData.GetShift(currentSegment, capturedLaneIndex)));
+                };
+
+                y += RowHeight;
             }
 
-            UIButton reset = LaneShiftUI.MakeButton(panel, "Reset all lanes", 140f, 28f, new Vector3(14f, y + 6f));
-            reset.eventClick += delegate (UIComponent c, UIMouseEventParameter p)
+            UIButton reset = LaneShiftUI.MakeButton(
+                panel,
+                "Reset all lanes",
+                145f,
+                28f,
+                new Vector3(14f, y + 7f));
+
+            reset.eventClick += delegate(UIComponent component, UIMouseEventParameter eventParam)
             {
                 LaneShiftData.ResetSegment(currentSegment);
                 Show(currentSegment);
             };
+
             rows.Add(reset);
 
-            panel.height = y + 48f;
+            panel.height = Mathf.Max(150f, y + FooterHeight);
             panel.isVisible = true;
+            panel.BringToFront();
         }
     }
 
+    // =====================================================================
+    // On-screen tool button
+    // =====================================================================
     public static class LaneShiftButton
     {
-        static UIButton button;
+        private static UIButton button;
 
         public static void Create()
         {
+            if (button != null)
+            {
+                return;
+            }
+
             UIView view = UIView.GetAView();
-            button = (UIButton)view.gameObject.AddComponent(typeof(UIButton));
+            if (view == null)
+            {
+                return;
+            }
+
+            // IMPORTANT: use AddUIComponent so the button is correctly owned
+            // by the CS1 UI hierarchy. Raw GameObject.AddComponent is not the
+            // normal way to create ColossalFramework.UI controls.
+            button = view.AddUIComponent<UIButton>();
+            button.name = "LaneShiftButton";
             button.text = "Lane Shift";
-            button.width = 90f;
-            button.height = 28f;
+            button.width = 92f;
+            button.height = 30f;
             button.relativePosition = new Vector3(10f, 90f);
             button.normalBgSprite = "ButtonMenu";
             button.hoveredBgSprite = "ButtonMenuHovered";
             button.pressedBgSprite = "ButtonMenuPressed";
             button.disabledBgSprite = "ButtonMenuDisabled";
             button.textColor = new Color32(255, 255, 255, 255);
-            button.textScale = 0.9f;
+            button.textScale = 0.88f;
             button.textHorizontalAlignment = UIHorizontalAlignment.Center;
             button.textVerticalAlignment = UIVerticalAlignment.Middle;
-            
-            button.name = "LaneShiftButton";
-            button.eventClick += delegate (UIComponent c, UIMouseEventParameter p) { LaneShiftTool.Toggle(); };
+
+            button.eventClick += delegate(UIComponent component, UIMouseEventParameter eventParam)
+            {
+                LaneShiftTool.Toggle();
+            };
         }
 
         public static void Destroy()
@@ -542,49 +1128,95 @@ namespace LaneShift
         }
     }
 
+    // =====================================================================
+    // Hotkey
+    // =====================================================================
     public class LaneShiftKeys : MonoBehaviour
     {
-        void Update()
+        private void Update()
         {
-            if (UIView.HasInputFocus()) return;
-            bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
-            if (ctrl && Input.GetKeyDown(KeyCode.L)) LaneShiftTool.Toggle();
+            if (UIView.HasInputFocus())
+            {
+                return;
+            }
+
+            bool ctrl =
+                Input.GetKey(KeyCode.LeftControl) ||
+                Input.GetKey(KeyCode.RightControl);
+
+            if (ctrl && Input.GetKeyDown(KeyCode.L))
+            {
+                LaneShiftTool.Toggle();
+            }
         }
     }
 
-    // ------------------------------------------------------------------ the tool
+    // =====================================================================
+    // Tool: click a network segment, then edit its lanes in the panel
+    // =====================================================================
     public class LaneShiftTool : ToolBase
     {
         public static LaneShiftTool Instance;
-        ushort hovered;
-        ushort selected;
+
+        private ushort hovered;
+        private ushort selected;
 
         public static void Create()
         {
-            GameObject go = ToolsModifierControl.toolController.gameObject;
-            Instance = go.AddComponent<LaneShiftTool>();
+            if (Instance != null)
+            {
+                return;
+            }
+
+            ToolController controller = ToolsModifierControl.toolController;
+            if (controller == null)
+            {
+                return;
+            }
+
+            Instance = controller.gameObject.AddComponent<LaneShiftTool>();
         }
 
         public static void Remove()
         {
-            if (Instance != null)
+            if (Instance == null)
             {
-                Deactivate();
-                UnityEngine.Object.Destroy(Instance);
-                Instance = null;
+                return;
             }
+
+            Deactivate();
+            UnityEngine.Object.Destroy(Instance);
+            Instance = null;
         }
 
         public static void Toggle()
         {
-            if (Instance == null) return;
-            if (ToolsModifierControl.toolController.CurrentTool == Instance) Deactivate();
-            else ToolsModifierControl.toolController.CurrentTool = Instance;
+            if (Instance == null)
+            {
+                return;
+            }
+
+            ToolController controller = ToolsModifierControl.toolController;
+            if (controller == null)
+            {
+                return;
+            }
+
+            if (controller.CurrentTool == Instance)
+            {
+                Deactivate();
+            }
+            else
+            {
+                controller.CurrentTool = Instance;
+            }
         }
 
         public static void Deactivate()
         {
-            if (Instance != null && ToolsModifierControl.toolController.CurrentTool == Instance)
+            if (Instance != null &&
+                ToolsModifierControl.toolController != null &&
+                ToolsModifierControl.toolController.CurrentTool == Instance)
             {
                 ToolsModifierControl.SetTool<DefaultTool>();
             }
@@ -624,27 +1256,34 @@ namespace LaneShift
         protected override void OnToolUpdate()
         {
             base.OnToolUpdate();
+
             try
             {
                 hovered = 0;
-                bool valid = !UIView.IsInsideUI() && Cursor.visible;
-                if (!valid) return;
+
+                if (UIView.IsInsideUI() || !Cursor.visible || Camera.main == null)
+                {
+                    return;
+                }
 
                 Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
                 float length = Camera.main.farClipPlane;
 
-                RaycastInput input = new RaycastInput(ray, length);
-                input.m_netService = new RaycastService(ItemClass.Service.None, ItemClass.SubService.None, ItemClass.Layer.Default);
+                ToolBase.RaycastInput input = new ToolBase.RaycastInput(ray, length);
+                input.m_netService = new RaycastService(
+                    ItemClass.Service.None,
+                    ItemClass.SubService.None,
+                    ItemClass.Layer.Default);
                 input.m_ignoreSegmentFlags = NetSegment.Flags.None;
                 input.m_ignoreTerrain = true;
 
-                RaycastOutput output;
+                ToolBase.RaycastOutput output;
                 if (RayCast(input, out output))
                 {
                     hovered = output.m_netSegment;
                 }
 
-                if (hovered != 0 && Input.GetMouseButtonUp(0))
+                if (hovered != 0 && Input.GetMouseButtonDown(0))
                 {
                     selected = hovered;
                     LaneShiftPanel.Show(selected);
@@ -659,13 +1298,23 @@ namespace LaneShift
         public override void RenderOverlay(RenderManager.CameraInfo cameraInfo)
         {
             base.RenderOverlay(cameraInfo);
+
             try
             {
                 if (hovered != 0 && hovered != selected)
-                    RenderSegment(cameraInfo, hovered, new Color(0.2f, 0.5f, 1f, 0.6f));
+                {
+                    RenderSegment(
+                        cameraInfo,
+                        hovered,
+                        new Color(0.2f, 0.5f, 1f, 0.6f));
+                }
+
                 if (selected != 0)
                 {
-                    RenderSegment(cameraInfo, selected, new Color(0.2f, 1f, 0.4f, 0.35f));
+                    RenderSegment(
+                        cameraInfo,
+                        selected,
+                        new Color(0.2f, 1f, 0.4f, 0.35f));
                     RenderLanes(cameraInfo, selected);
                 }
             }
@@ -675,57 +1324,129 @@ namespace LaneShift
             }
         }
 
-        static void RenderSegment(RenderManager.CameraInfo cameraInfo, ushort id, Color color)
+        private static void RenderSegment(
+            RenderManager.CameraInfo cameraInfo,
+            ushort segmentId,
+            Color color)
         {
-            NetManager nm = Singleton<NetManager>.instance;
-            NetSegment seg = nm.m_segments.m_buffer[id];
-            if ((seg.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || seg.Info == null) return;
+            NetManager netManager = Singleton<NetManager>.instance;
+            if (netManager == null || segmentId == 0 || segmentId >= netManager.m_segments.m_buffer.Length)
+            {
+                return;
+            }
 
-            Bezier3 bz;
-            bz.a = nm.m_nodes.m_buffer[seg.m_startNode].m_position;
-            bz.d = nm.m_nodes.m_buffer[seg.m_endNode].m_position;
-            bool startMiddle = (nm.m_nodes.m_buffer[seg.m_startNode].m_flags & NetNode.Flags.Middle) != NetNode.Flags.None;
-            bool endMiddle = (nm.m_nodes.m_buffer[seg.m_endNode].m_flags & NetNode.Flags.Middle) != NetNode.Flags.None;
-            NetSegment.CalculateMiddlePoints(bz.a, seg.m_startDirection, bz.d, seg.m_endDirection,
-                startMiddle, endMiddle, out bz.b, out bz.c);
+            NetSegment segment = netManager.m_segments.m_buffer[segmentId];
+            if ((segment.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None ||
+                segment.Info == null)
+            {
+                return;
+            }
 
-            float hw = seg.Info.m_halfWidth;
+            Bezier3 bezier = default(Bezier3);
+            bezier.a = netManager.m_nodes.m_buffer[segment.m_startNode].m_position;
+            bezier.d = netManager.m_nodes.m_buffer[segment.m_endNode].m_position;
+
+            bool startMiddle =
+                (netManager.m_nodes.m_buffer[segment.m_startNode].m_flags & NetNode.Flags.Middle) != NetNode.Flags.None;
+            bool endMiddle =
+                (netManager.m_nodes.m_buffer[segment.m_endNode].m_flags & NetNode.Flags.Middle) != NetNode.Flags.None;
+
+            NetSegment.CalculateMiddlePoints(
+                bezier.a,
+                segment.m_startDirection,
+                bezier.d,
+                segment.m_endDirection,
+                startMiddle,
+                endMiddle,
+                out bezier.b,
+                out bezier.c);
+
+            float halfWidth = segment.Info.m_halfWidth;
+
             Singleton<ToolManager>.instance.m_drawCallData.m_overlayCalls++;
-            RenderManager.instance.OverlayEffect.DrawBezier(cameraInfo, color, bz, hw * 2f, hw, hw, -1f, 1024f, false, true);
+            RenderManager.instance.OverlayEffect.DrawBezier(
+                cameraInfo,
+                color,
+                bezier,
+                halfWidth * 2f,
+                halfWidth,
+                halfWidth,
+                -1f,
+                1024f,
+                false,
+                true);
         }
 
-        static void RenderLanes(RenderManager.CameraInfo cameraInfo, ushort id)
+        private static void RenderLanes(RenderManager.CameraInfo cameraInfo, ushort segmentId)
         {
-            NetManager nm = Singleton<NetManager>.instance;
-            NetInfo info = nm.m_segments.m_buffer[id].Info;
-            if (info == null) return;
-            uint laneId = nm.m_segments.m_buffer[id].m_lanes;
-            for (int i = 0; i < info.m_lanes.Length && laneId != 0; i++)
+            NetManager netManager = Singleton<NetManager>.instance;
+            if (netManager == null || segmentId == 0 || segmentId >= netManager.m_segments.m_buffer.Length)
             {
-                float width = Mathf.Max(0.6f, info.m_lanes[i].m_width * 0.5f);
+                return;
+            }
+
+            NetInfo info = netManager.m_segments.m_buffer[segmentId].Info;
+            if (info == null)
+            {
+                return;
+            }
+
+            uint laneId = netManager.m_segments.m_buffer[segmentId].m_lanes;
+
+            for (int laneIndex = 0;
+                 laneIndex < info.m_lanes.Length && laneId != 0;
+                 laneIndex++)
+            {
+                float width = Mathf.Max(0.6f, info.m_lanes[laneIndex].m_width * 0.5f);
+
                 Singleton<ToolManager>.instance.m_drawCallData.m_overlayCalls++;
-                RenderManager.instance.OverlayEffect.DrawBezier(cameraInfo, new Color(1f, 0.9f, 0.2f, 0.9f),
-                    nm.m_lanes.m_buffer[laneId].m_bezier, width, 0f, 0f, -1f, 1024f, false, true);
-                laneId = nm.m_lanes.m_buffer[laneId].m_nextLane;
+                RenderManager.instance.OverlayEffect.DrawBezier(
+                    cameraInfo,
+                    new Color(1f, 0.9f, 0.2f, 0.9f),
+                    netManager.m_lanes.m_buffer[laneId].m_bezier,
+                    width,
+                    0f,
+                    0f,
+                    -1f,
+                    1024f,
+                    false,
+                    true);
+
+                laneId = netManager.m_lanes.m_buffer[laneId].m_nextLane;
             }
         }
     }
 
-    // ------------------------------------------------------------------ lifecycle
+    // =====================================================================
+    // Lifecycle / save data
+    // =====================================================================
     public class LaneShiftLoading : LoadingExtensionBase
     {
-        static GameObject keysObject;
+        private static GameObject keysObject;
 
         public override void OnLevelLoaded(LoadMode mode)
         {
-            if (mode != LoadMode.NewGame && mode != LoadMode.LoadGame && mode != LoadMode.NewGameFromScenario) return;
+            base.OnLevelLoaded(mode);
+
+            if (mode != LoadMode.NewGame &&
+                mode != LoadMode.LoadGame &&
+                mode != LoadMode.NewGameFromScenario)
+            {
+                return;
+            }
+
             try
             {
                 LaneShiftTool.Create();
                 LaneShiftPanel.Create();
                 LaneShiftButton.Create();
-                keysObject = new GameObject("LaneShiftKeys");
-                keysObject.AddComponent<LaneShiftKeys>();
+                LaneShiftData.RebuildAllSavedSegments();
+
+                if (keysObject == null)
+                {
+                    keysObject = new GameObject("LaneShiftKeys");
+                    keysObject.AddComponent<LaneShiftKeys>();
+                }
             }
             catch (Exception ex)
             {
@@ -740,47 +1461,60 @@ namespace LaneShift
                 LaneShiftTool.Remove();
                 LaneShiftPanel.Destroy();
                 LaneShiftButton.Destroy();
+
                 if (keysObject != null)
                 {
                     UnityEngine.Object.Destroy(keysObject);
                     keysObject = null;
                 }
+
                 LaneShiftData.Clear();
             }
             catch (Exception ex)
             {
                 Debug.LogException(ex);
             }
-        }
-    }
 
-    public class LaneShiftThreading : ThreadingExtensionBase
-    {
-        public override void OnAfterSimulationTick()
-        {
-            try { LaneShiftData.Tick(); }
-            catch (Exception ex) { Debug.LogException(ex); }
+            base.OnLevelUnloading();
         }
     }
 
     public class LaneShiftSerialization : SerializableDataExtensionBase
     {
-        const string Key = "LaneShift_v1";
+        private const string Key = "LaneShift_v1";
 
         public override void OnLoadData()
         {
-            try { LaneShiftData.Deserialize(serializableDataManager.LoadData(Key)); }
-            catch (Exception ex) { Debug.LogException(ex); }
+            try
+            {
+                LaneShiftData.Deserialize(serializableDataManager.LoadData(Key));
+            }
+            catch (Exception ex)
+            {
+                Debug.LogException(ex);
+            }
         }
 
         public override void OnSaveData()
         {
             try
             {
+                LaneShiftData.PruneInvalidRecords();
                 byte[] data = LaneShiftData.Serialize();
-                if (data != null) serializableDataManager.SaveData(Key, data);
+
+                if (data != null)
+                {
+                    serializableDataManager.SaveData(Key, data);
+                }
+                else
+                {
+                    serializableDataManager.EraseData(Key);
+                }
             }
-            catch (Exception ex) { Debug.LogException(ex); }
+            catch (Exception ex)
+            {
+                Debug.LogException(ex);
+            }
         }
     }
 }
