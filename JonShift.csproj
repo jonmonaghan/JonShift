@@ -4,7 +4,6 @@
     <OutputType>Library</OutputType>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>disable</Nullable>
-    <!-- Instructs MSBuild to completely bypass looking at local framework caches -->
     <AddFrameworkPaths>false</AddFrameworkPaths>
   </PropertyGroup>
 
@@ -27,10 +26,6 @@
     </Reference>
     <Reference Include="UnityEngine.UI">
       <HintPath>libs\UnityEngine.UI.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="ColossalFramework">
-      <HintPath>libs\ColossalFramework.dll</HintPath>
       <Private>False</Private>
     </Reference>
   </ItemGroup>
